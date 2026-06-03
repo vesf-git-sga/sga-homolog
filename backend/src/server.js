@@ -3430,67 +3430,76 @@ app.post('/api/assets', authenticateToken, authorizePermission('ACTION_CREATE_ED
   }
 });
 
-// Listar todos os Ativos (com filtros e paginação, se necessário no futuro)
+// Listar todos os Ativos (Com Busca inteligente no banco e Limite Seguro)
 app.get('/api/assets', authenticateToken, async (req, res) => {
-  const { status } = req.query;
+  // Captura o parâmetro 'search' vindo do frontend
+  const { status, search } = req.query;
 
   try {
-    let query;
+    let selectClause = '';
+    let fromClause = '';
+    let whereClauses = [];
     const params = [];
+    let paramIndex = 1;
 
     if (status === 'in_use' || status === 'loaned') {
-      // Consulta enriquecida para ativos que estão com usuários
-      query = `
+      selectClause = `
         WITH LatestOutgoingMovement AS (
-          SELECT
-            ma.asset_id,
-            MAX(am.id) AS movement_id
+          SELECT ma.asset_id, MAX(am.id) AS movement_id
           FROM asset_movements am
           JOIN movement_assets ma ON am.id = ma.movement_id
           WHERE am.movement_type IN ('exit', 'loan')
           GROUP BY ma.asset_id
         )
-        SELECT
-          a.*,
-          it.name AS item_type_name,
-          u.name AS current_unit_name,
-          p.full_name AS responsible_person_name
+        SELECT a.*, it.name AS item_type_name, u.name AS current_unit_name, p.full_name AS responsible_person_name
+      `;
+      fromClause = `
         FROM assets a
         JOIN item_types it ON a.item_type_id = it.id
         LEFT JOIN LatestOutgoingMovement lom ON a.id = lom.asset_id
         LEFT JOIN asset_movements am ON lom.movement_id = am.id
         LEFT JOIN people p ON am.recipient_person_id = p.id
         LEFT JOIN units u ON am.destination_unit_id = u.id
-        WHERE a.status = $1
-        ORDER BY p.full_name, a.patrimonio_number
-        LIMIT 500;
       `;
+      whereClauses.push(`a.status = $${paramIndex++}`);
       params.push(status);
     } else {
-      // Consulta padrão para outros status (available, maintenance, etc.)
-      query = `
-        SELECT
-          a.*,
-          it.name AS item_type_name,
-          u.name AS current_unit_name
+      selectClause = `SELECT a.*, it.name AS item_type_name, u.name AS current_unit_name`;
+      fromClause = `
         FROM assets a
         JOIN item_types it ON a.item_type_id = it.id
         LEFT JOIN units u ON a.current_unit_id = u.id
       `;
       if (status) {
+        whereClauses.push(`a.status = $${paramIndex++}`);
         params.push(status);
-        query += ` WHERE a.status = $1`;
-        query += ` ORDER BY a.patrimonio_number ASC LIMIT 500`;
-      } else {
-        query += ` ORDER BY a.patrimonio_number ASC LIMIT 500`;
       }
     }
+
+    // A MÁGICA: Filtra no banco de dados ANTES de limitar
+    if (search && search.trim() !== '') {
+      whereClauses.push(`(
+        a.patrimonio_number ILIKE $${paramIndex} OR
+        a.brand ILIKE $${paramIndex} OR
+        a.model ILIKE $${paramIndex} OR
+        a.serial_number ILIKE $${paramIndex}
+      )`);
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    let query = selectClause + '\n' + fromClause;
+    if (whereClauses.length > 0) {
+      query += '\nWHERE ' + whereClauses.join(' AND ');
+    }
+
+    // Aplica o limite engessado de segurança no final
+    query += `\nORDER BY a.patrimonio_number ASC LIMIT 500;`;
 
     const result = await pool.query(query, params);
     res.status(200).json(result.rows);
   } catch (error) {
     console.error('Erro ao listar ativos:', error);
-    await logAudit(req.user.id, 'list_assets_error', 'asset', null, { error: error.message }, req.ip);
     res.status(500).json({ message: 'Erro interno do servidor ao listar ativos.' });
   }
 });
@@ -12729,6 +12738,79 @@ app.post('/api/tablets/legacy/import', authenticateToken, authorizePermission('M
         client.release();
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
+});
+
+
+// =====================================================================
+// ROTAS DE SISTEMA DE CATÁLOGO INTEGRADO (BLINDAGEM DE MARCA E MODELO)
+// =====================================================================
+
+// GET /api/catalog/brands - Lista marcas disponíveis para um Tipo de Item específico
+app.get('/api/catalog/brands', authenticateToken, async (req, res) => {
+    const { item_type_id } = req.query;
+    try {
+        let query = 'SELECT id, name FROM catalog_brands ORDER BY name ASC';
+        let params = [];
+        if (item_type_id) {
+            query = `SELECT DISTINCT cb.id, cb.name 
+                     FROM catalog_brands cb 
+                     JOIN catalog_models cm ON cb.id = cm.brand_id 
+                     WHERE cm.item_type_id = $1 
+                     ORDER BY cb.name ASC`;
+            params = [item_type_id];
+        }
+        const result = await pool.query(query, params);
+        res.status(200).json(result.rows);
+    } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// GET /api/catalog/models - Lista modelos filtrados por Marca e por Tipo de Item
+app.get('/api/catalog/models', authenticateToken, async (req, res) => {
+    const { brand_id, item_type_id } = req.query;
+    if (!brand_id || !item_type_id) {
+        return res.status(400).json({ message: 'brand_id e item_type_id são obrigatórios.' });
+    }
+    try {
+        const result = await pool.query(
+            'SELECT id, name FROM catalog_models WHERE brand_id = $1 AND item_type_id = $2 ORDER BY name ASC', 
+            [brand_id, item_type_id]
+        );
+        res.status(200).json(result.rows);
+    } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// POST /api/catalog/brands - Cadastra uma nova marca (Força Caixa Alta e evita duplicados)
+app.post('/api/catalog/brands', authenticateToken, async (req, res) => {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ message: 'Nome da marca é obrigatório.' });
+    const cleanName = String(name).trim().toUpperCase();
+    try {
+        const result = await pool.query(
+            'INSERT INTO catalog_brands (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
+            [cleanName]
+        );
+        res.status(201).json({ id: result.rows[0].id, name: cleanName });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/catalog/models - Cadastra um novo modelo vinculado à Marca e Tipo de Item
+app.post('/api/catalog/models', authenticateToken, async (req, res) => {
+    const { name, brand_id, item_type_id } = req.body;
+    if (!name || !brand_id || !item_type_id) {
+        return res.status(400).json({ message: 'Nome, brand_id e item_type_id são obrigatórios.' });
+    }
+    const cleanName = String(name).trim().toUpperCase();
+    try {
+        const result = await pool.query(
+            'INSERT INTO catalog_models (name, brand_id, item_type_id) VALUES ($1, $2, $3) ON CONFLICT (brand_id, name, item_type_id) DO NOTHING RETURNING id',
+            [cleanName, brand_id, item_type_id]
+        );
+        if (result.rowCount === 0) {
+            const existing = await pool.query('SELECT id FROM catalog_models WHERE brand_id = $1 AND name = $2 AND item_type_id = $3', [brand_id, cleanName, item_type_id]);
+            return res.status(200).json({ id: existing.rows[0].id, name: cleanName });
+        }
+        res.status(201).json({ id: result.rows[0].id, name: cleanName });
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Inicia o servidor

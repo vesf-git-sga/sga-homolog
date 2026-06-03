@@ -25,6 +25,7 @@ import QueryHubPage from './components/QueryHubPage';
 import UnitForm from './components/UnitForm';
 import ParentUnitModal from './components/ParentUnitModal';
 import Select from 'react-select';
+import CreatableSelect from 'react-select/creatable';
 import TabletDashboard from './components/TabletDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import TabletAudit from './components/TabletAudit';
@@ -1037,10 +1038,15 @@ const DashboardPage = () => {
     }
   }, [API_URL, addToast, setUnits]);
 
-  const fetchAssets = useCallback(async () => {
-    console.log('Fetching assets...');
+  const fetchAssets = useCallback(async (searchQuery: string = '', statusQuery: string = '') => {
+    console.log('Fetching assets com filtros do banco...', { searchQuery, statusQuery });
     try {
-      const response = await axios.get<Asset[]>(`${API_URL}/assets`);
+      const response = await axios.get<Asset[]>(`${API_URL}/assets`, {
+        params: {
+          search: searchQuery || undefined,
+          status: statusQuery || undefined
+        }
+      });
       setAssets(response.data);
     } catch (error) {
       console.error('Erro ao buscar ativos:', error);
@@ -1908,22 +1914,35 @@ const DashboardPage = () => {
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
 
                   {/* 1. Busca Textual (Patrimônio, Serial, Modelo) */}
-                  <div className="md:col-span-2 relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Buscar por Patrimônio, Série, Marca ou Modelo..."
-                      value={assetFilter}
-                      onChange={(e) => setAssetFilter(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
+                  <div className="md:col-span-2 flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Buscar no banco (Pressione Enter)..."
+                        value={assetFilter}
+                        onChange={(e) => setAssetFilter(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && fetchAssets(assetFilter, assetStatusFilter)}
+                        className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </div>
+                    <button 
+                      onClick={() => fetchAssets(assetFilter, assetStatusFilter)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition-colors"
+                    >
+                      Buscar
+                    </button>
                   </div>
 
                   {/* 2. Filtro por Status */}
                   <div>
                     <select
                       value={assetStatusFilter}
-                      onChange={(e) => setAssetStatusFilter(e.target.value)}
+                      onChange={(e) => {
+                        setAssetStatusFilter(e.target.value);
+                        // Opcional: dispara a busca automaticamente ao trocar o status
+                        fetchAssets(assetFilter, e.target.value);
+                      }}
                       className="w-full p-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 outline-none"
                     >
                       <option value="">Todos os Status</option>
@@ -3633,9 +3652,78 @@ interface AssetModalProps {
 }
 
 const AssetModal = ({ onClose, onSave, asset, itemTypes, units, translateStatus, userRole }: AssetModalProps) => {
+  const { API_URL } = useContext(AuthContext) as AuthContextType;
   const [itemTypeId, setItemTypeId] = useState<string>(asset?.item_type_id?.toString() || '');
   const [brand, setBrand] = useState<string>(asset?.brand || '');
   const [model, setModel] = useState<string>(asset?.model || '');
+  const [brandId, setBrandId] = useState<string>('');
+  const [brands, setBrands] = useState<{label: string, value: string}[]>([]);
+  const [models, setModels] = useState<{label: string, value: string}[]>([]);
+
+  // Carrega as marcas disponíveis baseadas no Tipo de Item (Objetivo 2)
+  useEffect(() => {
+    if (!itemTypeId) {
+      setBrands([]);
+      return;
+    }
+    axios.get(`${API_URL}/catalog/brands?item_type_id=${itemTypeId}`, { 
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+    })
+    .then(res => setBrands(res.data.map((b: any) => ({ label: b.name, value: b.id.toString() }))));
+  }, [itemTypeId, API_URL]);
+
+  // Se for edição de ativo existente, localiza o ID da marca correspondente ao texto
+  useEffect(() => {
+    if (asset && brands.length > 0) {
+      const found = brands.find(b => b.label === asset.brand);
+      if (found) setBrandId(found.value);
+    }
+  }, [asset, brands]);
+
+  // Carrega os modelos condicionados à Marca e ao Tipo de Item (Objetivo 3)
+  useEffect(() => {
+    if (brandId && itemTypeId) {
+      axios.get(`${API_URL}/catalog/models?brand_id=${brandId}&item_type_id=${itemTypeId}`, { 
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      })
+      .then(res => setModels(res.data.map((m: any) => ({ label: m.name, value: m.id.toString() }))));
+    } else {
+      setModels([]);
+    }
+  }, [brandId, itemTypeId, API_URL]);
+
+  const handleCreateBrand = async (inputValue: string) => {
+    try {
+      const { data } = await axios.post(`${API_URL}/catalog/brands`, { name: inputValue }, { 
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      const newOption = { label: data.name, value: data.id.toString() };
+      setBrands(prev => [...prev, newOption]);
+      setBrand(data.name);
+      setBrandId(data.id.toString());
+      setModel('');
+    } catch (e) {
+      console.error("Erro ao criar marca:", e);
+    }
+  };
+
+  const handleCreateModel = async (inputValue: string) => {
+    if (!brandId || !itemTypeId) return;
+    try {
+      const { data } = await axios.post(`${API_URL}/catalog/models`, { 
+        name: inputValue, 
+        brand_id: brandId,
+        item_type_id: itemTypeId
+      }, { 
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      const newOption = { label: data.name, value: data.id.toString() };
+      setModels(prev => [...prev, newOption]);
+      setModel(data.name);
+    } catch (e) {
+      console.error("Erro ao criar modelo:", e);
+    }
+  };
   const [description, setDescription] = useState<string>(asset?.description || '');
   const [serialNumber, setSerialNumber] = useState<string>(asset?.serial_number || '');
   const [patrimonioNumber, setPatrimonioNumber] = useState<string>(asset?.patrimonio_number || '');
@@ -3728,7 +3816,12 @@ const AssetModal = ({ onClose, onSave, asset, itemTypes, units, translateStatus,
             <select
               id="itemTypeId"
               value={itemTypeId}
-              onChange={(e) => setItemTypeId(e.target.value)}
+              onChange={(e) => { 
+                setItemTypeId(e.target.value); 
+                setBrand(''); 
+                setBrandId(''); 
+                setModel(''); 
+              }}
               className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
               required
             >
@@ -3740,26 +3833,39 @@ const AssetModal = ({ onClose, onSave, asset, itemTypes, units, translateStatus,
               ))}
             </select>
           </div>
+          {/* Campo Marca Blindado */}
           <div>
-            <label htmlFor="brand" className="block text-sm font-medium text-gray-700 mb-1">Marca</label>
-            <input
-              type="text"
-              id="brand"
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              required
+            <label className="block text-sm font-medium text-gray-700 mb-1">Marca *</label>
+            <CreatableSelect
+              isClearable
+              isDisabled={!itemTypeId}
+              options={brands}
+              value={brand ? { label: brand, value: brandId } : null}
+              onChange={(val: any) => { 
+                setBrand(val ? val.label : ''); 
+                setBrandId(val ? val.value : ''); 
+                setModel(''); 
+              }}
+              onCreateOption={handleCreateBrand}
+              placeholder={itemTypeId ? "Selecione ou digite..." : "Selecione o tipo de item primeiro"}
+              formatCreateLabel={(inputValue) => `Criar marca "${inputValue.toUpperCase()}"`}
+              styles={{ menu: (base) => ({ ...base, zIndex: 9999 }) }}
             />
           </div>
+
+          {/* Campo Modelo Blindado */}
           <div>
-            <label htmlFor="model" className="block text-sm font-medium text-gray-700 mb-1">Modelo</label>
-            <input
-              type="text"
-              id="model"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              required
+            <label className="block text-sm font-medium text-gray-700 mb-1">Modelo *</label>
+            <CreatableSelect
+              isClearable
+              isDisabled={!brandId}
+              options={models}
+              value={model ? { label: model, value: model } : null}
+              onChange={(val: any) => setModel(val ? val.label : '')}
+              onCreateOption={handleCreateModel}
+              placeholder={brandId ? "Selecione ou digite..." : "Selecione uma marca primeiro"}
+              formatCreateLabel={(inputValue) => `Criar modelo "${inputValue.toUpperCase()}"`}
+              styles={{ menu: (base) => ({ ...base, zIndex: 9999 }) }}
             />
           </div>
           <div>
