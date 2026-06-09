@@ -15,7 +15,7 @@ interface Unit {
   contact_phone?: string;
   contact_email?: string;
   notes?: string;
-  rpa?: string | number;
+  rpa?: string;
 }
 
 interface UnitData {
@@ -28,7 +28,7 @@ interface UnitData {
     contact_phone?: string;
     contact_email?: string;
     notes?: string;
-    rpa?: string | number;
+    rpa?: string;
 }
 
 interface UnitFormProps {

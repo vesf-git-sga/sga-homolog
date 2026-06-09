@@ -37,10 +37,6 @@ import DashboardView from './components/DashboardView';
 import CdInventoryPage from './components/CdInventoryPage';
 import PendingTermsList from './components/PendingTermsList';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
-import RequestsDashboardView, { mockRequests } from './components/RequestsDashboardView';
-import RequestFormModal from './components/RequestFormModal';
-import TIRequestDetailsModal from './components/TIRequestDetailsModal';
-import RecolhimentosListView from './components/RecolhimentosListView';
 
 
 // --- LISTAS PADRÃO PARA COMBOS (DROPDOWNS) ---
@@ -221,7 +217,6 @@ export interface Unit {
   contact_email?: string;
   notes?: string;
   current_assets_count?: number;
-  rpa?: string | number;
 }
 
 // Interface para Ativos (ATUALIZADA com dados logísticos complementares)
@@ -760,11 +755,6 @@ const DashboardPage = () => {
   const [assetUnitFilter, setAssetUnitFilter] = useState('');
   const [expiringWarranties, setExpiringWarranties] = useState<{ count: number; description: string; endDate: string; daysRemaining: number }[]>([]);
   const [substitutionToFinalize, setSubstitutionToFinalize] = useState<any>(null);
-  
-  // Estados para Solicitações e Recolhimentos de TI (Sprint 1)
-  const [requests, setRequests] = useState<any[]>(mockRequests);
-  const [showRequestFormModal, setShowRequestFormModal] = useState<boolean>(false);
-  const [selectedRequestDetails, setSelectedRequestDetails] = useState<any | null>(null);
 
   // Estado para controlar qual submenu do sidebar está aberto
   // Pode ser 'school' (Escolar) ou 'logistics' (Logística) ou null (fechado)
@@ -809,40 +799,6 @@ const DashboardPage = () => {
     setMovementToSubstitute(movement);
     setSubstitutionOldAssetId(null); // Limpa a seleção anterior ao abrir
   };
-
-  // Handlers para Solicitações de TI (Sprint 1)
-  const handleCreateRequest = (newReq: any) => {
-    setRequests(prev => [newReq, ...prev]);
-    setShowRequestFormModal(false);
-    addToast('Solicitação criada com sucesso!', 'success');
-  };
-
-  const handleUpdateRequestStatus = (id: number, updatedFields: any) => {
-    setRequests(prev => prev.map(req => {
-      if (req.id === id) {
-        return { ...req, ...updatedFields };
-      }
-      return req;
-    }));
-    setSelectedRequestDetails((prev: any) => {
-      if (prev && prev.id === id) {
-        return { ...prev, ...updatedFields };
-      }
-      return prev;
-    });
-    addToast('Status da solicitação atualizado com sucesso!', 'success');
-  };
-
-  const handleSelectRequestByChamado = (chamado: string) => {
-    const found = requests.find(r => r.numeroChamado === chamado);
-    if (found) {
-      setSelectedRequestDetails(found);
-    } else {
-      addToast(`Nenhuma solicitação ativa encontrada para o chamado #${chamado}.`, 'warning');
-    }
-  };
-
-
 
   const handleSubstitutionSelection = (id: number | null) => {
     console.log(`%c[App.tsx] Tentando definir o ID de seleção para: ${id}`, 'color: green; font-weight: bold;');
@@ -1244,16 +1200,6 @@ const DashboardPage = () => {
       ]
     },
 
-    {
-      name: 'Solicitações de TI',
-      icon: Layers,
-      id: 'solicitacoes_ti',
-      roles: [ROLES.ADMIN, ROLES.MANAGER, ROLES.ADVISOR, ROLES.BASIC, ROLES.OPERATOR],
-      subMenus: [
-        { name: 'Solicitações', icon: Inbox, id: 'solicitacoes', roles: [ROLES.ADMIN, ROLES.MANAGER, ROLES.ADVISOR, ROLES.BASIC, ROLES.OPERATOR] },
-        { name: 'Recolhimentos', icon: ArchiveRestore, id: 'recolhimentos', roles: [ROLES.ADMIN, ROLES.MANAGER, ROLES.ADVISOR, ROLES.BASIC, ROLES.OPERATOR] },
-      ]
-    },
     { name: 'Consultas', icon: Search, id: 'queries', roles: PERMISSIONS.MENU_CONSULTAS },
     { name: 'Estoque do CD', icon: Package, id: 'cd-inventory', roles: PERMISSIONS.MENU_CONSULTAS },
     { name: 'Relatórios', icon: BarChart2, id: 'reports', roles: PERMISSIONS.MENU_RELATORIOS },
@@ -2598,39 +2544,7 @@ const DashboardPage = () => {
             />
           )}
 
-          {/* Renderização das novas abas de Solicitações de TI (Sprint 1) */}
-          {activeMenu === 'solicitacoes' && (
-            <RequestsDashboardView 
-              userRole={user?.role || ''}
-              onOpenNewRequest={() => setShowRequestFormModal(true)}
-              onViewDetails={setSelectedRequestDetails}
-            />
-          )}
-
-          {activeMenu === 'recolhimentos' && (
-            <RecolhimentosListView 
-              onSelectRequestByChamado={handleSelectRequestByChamado}
-            />
-          )}
-
         </main>
-
-        {/* Modais de Solicitações de TI (Sprint 1) */}
-        {showRequestFormModal && (
-          <RequestFormModal
-            units={units}
-            onClose={() => setShowRequestFormModal(false)}
-            onSubmit={handleCreateRequest}
-          />
-        )}
-
-        {selectedRequestDetails && (
-          <TIRequestDetailsModal
-            request={selectedRequestDetails}
-            onClose={() => setSelectedRequestDetails(null)}
-            onUpdateStatus={handleUpdateRequestStatus}
-          />
-        )}
       </div>
 
       {/* MODAL DE RENOVAÇÃO AQUI */}
