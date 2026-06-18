@@ -275,6 +275,37 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
                     </div>
                   </div>
 
+                  {/* ── Equipamentos Solicitados ── */}
+                  {request.items && request.items.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Equipamentos Solicitados</p>
+                      <ul className="space-y-1.5">
+                        {request.items.map(item => (
+                          <li key={item.id}
+                            className="flex items-center justify-between px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-sm">
+                            <span className="text-blue-800 font-medium">
+                              {[item.item_type_name, item.brand_name, item.model_name].filter(Boolean).join(' · ')}
+                              {item.description && !item.brand_name && (
+                                <span className="text-gray-500"> — {item.description}</span>
+                              )}
+                            </span>
+                            <span className="text-xs text-blue-600 font-semibold ml-3 flex-shrink-0">
+                              × {item.quantity}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* ── Ofício ── */}
+                  {request.oficio_path && (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                      <span className="text-amber-700 font-medium">Ofício:</span>
+                      <span className="text-gray-700 truncate">{request.oficio_original_name || 'Arquivo anexado'}</span>
+                    </div>
+                  )}
+
                   {request.notes && (
                     <div className="p-3 bg-gray-50 rounded-lg text-sm text-gray-700 border border-gray-100">
                       <p className="text-xs text-gray-400 mb-1">Observações</p>

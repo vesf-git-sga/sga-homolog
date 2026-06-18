@@ -88,7 +88,7 @@ function getAllowedTransitions(request, role) {
 
 // ─── Criação ───────────────────────────────────────────────────────────────
 
-async function createRequest(pool, data, currentUserId) {
+async function createRequest(pool, data, currentUserId, oficioPath, oficioOriginalName) {
   if (!data.type || !data.requester_person_id || !data.unit_id) {
     throw new Error('Campos obrigatórios: type, requester_person_id, unit_id.')
   }
@@ -127,7 +127,30 @@ async function createRequest(pool, data, currentUserId) {
     throw new Error('Número do chamado é obrigatório.')
   }
 
-  return repository.create(pool, { ...data, created_by: currentUserId })
+  // Itens do catálogo — obrigatório ao menos um
+  const items = Array.isArray(data.items) ? data.items : []
+  if (items.length === 0) {
+    throw new Error('A solicitação deve conter pelo menos um item de equipamento.')
+  }
+  for (const item of items) {
+    if (!item.item_type_id) throw new Error('Cada item deve ter um tipo de equipamento.')
+    if (!item.quantity || item.quantity < 1) throw new Error('Quantidade inválida em algum item.')
+  }
+
+  // Ofício obrigatório
+  if (!oficioPath) {
+    throw new Error('O anexo do ofício é obrigatório.')
+  }
+
+  const request = await repository.create(pool, { ...data, created_by: currentUserId })
+
+  // Persiste itens
+  await repository.createCatalogItems(pool, request.id, items)
+
+  // Persiste caminho do ofício
+  await repository.updateOficioPath(pool, request.id, oficioPath, oficioOriginalName)
+
+  return { ...request, oficio_path: oficioPath, oficio_original_name: oficioOriginalName, items }
 }
 
 // ─── Consultas ────────────────────────────────────────────────────────────
@@ -140,17 +163,18 @@ async function getRequestById(pool, id, currentUser) {
   const request = await repository.findById(pool, id)
   if (!request) throw new Error('Solicitação não encontrada.')
 
-  const [visits, history, movements] = await Promise.all([
+  const [visits, history, movements, items] = await Promise.all([
     repository.findTechnicalVisitsByRequestId(pool, id),
     repository.findStatusHistory(pool, id),
     repository.findMovementsByRequestId(pool, id),
+    repository.findCatalogItemsByRequestId(pool, id),
   ])
 
   const allowed_transitions = currentUser
     ? getAllowedTransitions(request, currentUser.role)
     : []
 
-  return { ...request, visits, history, movements, allowed_transitions }
+  return { ...request, visits, history, movements, items, allowed_transitions }
 }
 
 // ─── Transições de status ─────────────────────────────────────────────────

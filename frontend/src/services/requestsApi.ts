@@ -10,6 +10,9 @@ import {
   RequestStatus,
   RequestType,
   InputChannel,
+  CatalogBrand,
+  CatalogModel,
+  ItemType,
 } from '../types/requests'
 
 let API_URL = process.env.REACT_APP_API_URL || `http://${window.location.hostname}:5000/api`
@@ -23,14 +26,12 @@ export interface RequestListFilters {
   search?: string
 }
 
-export interface CreateRequestPayload {
-  type: RequestType
-  input_channel: InputChannel
-  input_channel_details?: string
-  requester_person_id: number
-  unit_id: number
-  fundamentacao?: 'avaria' | 'necessidade_operacional'
-  notes?: string
+export interface RequestItemPayload {
+  item_type_id: number
+  brand_id?: number | null
+  model_id?: number | null
+  description?: string
+  quantity: number
 }
 
 export interface ScheduleVisitPayload {
@@ -59,8 +60,9 @@ export const requestsApi = {
   getById: (id: number) =>
     axios.get<EquipmentRequest>(`${API_URL}/requests/${id}`).then(r => r.data),
 
-  create: (payload: CreateRequestPayload) =>
-    axios.post<EquipmentRequest>(`${API_URL}/requests`, payload).then(r => r.data),
+  // Criação via multipart/form-data (inclui ofício + itens serializados)
+  create: (formData: FormData) =>
+    axios.post<EquipmentRequest>(`${API_URL}/requests`, formData).then(r => r.data),
 
   changeStatus: (id: number, status: RequestStatus, notes?: string) =>
     axios.patch<EquipmentRequest>(`${API_URL}/requests/${id}/status`, { status, notes }).then(r => r.data),
@@ -81,4 +83,20 @@ export const requestsApi = {
   // Pré-preenchimento no form de movimentação
   getApprovedPrefill: (id: number) =>
     axios.get<ApprovedPrefill>(`${API_URL}/requests/${id}/approved-prefill`).then(r => r.data),
+
+  // ─── Catálogo ───────────────────────────────────────────────────────────
+  listItemTypes: () =>
+    axios.get<ItemType[]>(`${API_URL}/item-types`).then(r => r.data),
+
+  listBrands: (item_type_id?: number) =>
+    axios.get<CatalogBrand[]>(`${API_URL}/catalog/brands`, { params: item_type_id ? { item_type_id } : {} }).then(r => r.data),
+
+  listModels: (brand_id: number, item_type_id: number) =>
+    axios.get<CatalogModel[]>(`${API_URL}/catalog/models`, { params: { brand_id, item_type_id } }).then(r => r.data),
+
+  createBrand: (name: string) =>
+    axios.post<CatalogBrand>(`${API_URL}/catalog/brands`, { name }).then(r => r.data),
+
+  createModel: (name: string, brand_id: number, item_type_id: number) =>
+    axios.post<CatalogModel>(`${API_URL}/catalog/models`, { name, brand_id, item_type_id }).then(r => r.data),
 }

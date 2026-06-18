@@ -13,6 +13,24 @@ export type RequestStatus =
 
 export type InputChannel = 'email' | 'sei' | 'chamado'
 
+export interface CatalogBrand { id: number; name: string }
+export interface CatalogModel { id: number; name: string; brand_id: number; item_type_id: number }
+export interface ItemType     { id: number; name: string; code: string }
+
+export interface RequestCatalogItem {
+  id: number
+  request_id: number
+  item_type_id: number
+  item_type_name: string
+  brand_id?: number | null
+  brand_name?: string | null
+  model_id?: number | null
+  model_name?: string | null
+  description?: string | null
+  quantity: number
+  created_at: string
+}
+
 export interface EquipmentRequest {
   id: number
   protocol: string
@@ -27,6 +45,8 @@ export interface EquipmentRequest {
   unit_rpa?: string
   fundamentacao?: 'avaria' | 'necessidade_operacional' | null
   notes?: string | null
+  oficio_path?: string | null
+  oficio_original_name?: string | null
   created_by: number
   created_by_name?: string
   approved_by?: number | null
@@ -35,6 +55,7 @@ export interface EquipmentRequest {
   created_at: string
   updated_at: string
   // carregados via getById
+  items?: RequestCatalogItem[]
   visits?: TechnicalVisit[]
   history?: StatusHistoryEntry[]
   movements?: LinkedMovement[]

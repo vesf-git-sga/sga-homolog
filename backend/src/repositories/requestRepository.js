@@ -264,6 +264,45 @@ async function findMovementsByRequestId(pool, requestId) {
   return result.rows
 }
 
+// ─── Itens do catálogo ────────────────────────────────────────────────────────
+
+async function createCatalogItems(pool, requestId, items) {
+  for (const item of items) {
+    await pool.query(
+      `INSERT INTO request_catalog_items
+        (request_id, item_type_id, brand_id, model_id, description, quantity)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [requestId, item.item_type_id, item.brand_id || null, item.model_id || null, item.description || null, item.quantity || 1]
+    )
+  }
+}
+
+async function findCatalogItemsByRequestId(pool, requestId) {
+  const result = await pool.query(
+    `SELECT rci.*,
+            it.name  AS item_type_name,
+            cb.name  AS brand_name,
+            cm.name  AS model_name
+     FROM request_catalog_items rci
+     JOIN item_types    it ON it.id = rci.item_type_id
+     LEFT JOIN catalog_brands cb ON cb.id = rci.brand_id
+     LEFT JOIN catalog_models  cm ON cm.id = rci.model_id
+     WHERE rci.request_id = $1
+     ORDER BY rci.created_at ASC`,
+    [requestId]
+  )
+  return result.rows
+}
+
+async function updateOficioPath(pool, requestId, oficioPath, oficioOriginalName) {
+  await pool.query(
+    `UPDATE requests
+     SET oficio_path = $1, oficio_original_name = $2, updated_at = NOW()
+     WHERE id = $3`,
+    [oficioPath, oficioOriginalName, requestId]
+  )
+}
+
 // ─── Helpers de validação ─────────────────────────────────────────────────────
 
 async function personExists(pool, personId) {
@@ -296,6 +335,9 @@ module.exports = {
   findTechnicalVisitsByRequestId,
   findStatusHistory,
   findMovementsByRequestId,
+  createCatalogItems,
+  findCatalogItemsByRequestId,
+  updateOficioPath,
   personExists,
   findUnitById,
   findApprovedRequestById,

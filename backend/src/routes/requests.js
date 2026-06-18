@@ -3,11 +3,37 @@
 
 module.exports = function (pool, authenticateToken, authorizePermission, logAudit) {
   const express = require('express')
-  const router = express.Router()
+  const multer  = require('multer')
+  const path    = require('path')
+  const fs      = require('fs')
+  const router  = express.Router()
   const controller = require('../controllers/requestController')
 
+  // ─── Multer para upload de ofício ────────────────────────────────────────
+  const oficioDir = path.join(__dirname, '..', 'uploads', 'requests', 'oficios')
+  if (!fs.existsSync(oficioDir)) fs.mkdirSync(oficioDir, { recursive: true })
+
+  const uploadOficio = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, oficioDir),
+      filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase()
+        cb(null, `oficio_${Date.now()}${ext}`)
+      },
+    }),
+    fileFilter: (_req, file, cb) => {
+      const allowed = ['.pdf', '.jpg', '.jpeg', '.png']
+      if (allowed.includes(path.extname(file.originalname).toLowerCase())) {
+        cb(null, true)
+      } else {
+        cb(new Error('Formato não permitido. Use PDF, JPG ou PNG.'))
+      }
+    },
+    limits: { fileSize: 10 * 1024 * 1024 },
+  })
+
   // ─── CRUD ───────────────────────────────────────────────────────────────
-  router.post('/requests', authenticateToken,
+  router.post('/requests', authenticateToken, uploadOficio.single('oficio'),
     (req, res) => controller.create(req, res, pool, logAudit))
 
   router.get('/requests', authenticateToken,

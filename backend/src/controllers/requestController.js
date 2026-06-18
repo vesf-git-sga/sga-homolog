@@ -1,17 +1,35 @@
 // controllers/requestController.js
 // Camada HTTP — validação de req.body, formatação de resposta
 
+const fs = require('fs')
 const service = require('../services/requestService')
 const repository = require('../repositories/requestRepository')
 
 async function create(req, res, pool, logAudit) {
+  const oficioPath = req.file ? req.file.path : null
+  const oficioOriginalName = req.file ? req.file.originalname : null
+
   try {
-    const result = await service.createRequest(pool, req.body, req.user.id)
+    // Campos numéricos chegam como string em multipart/form-data
+    const data = {
+      ...req.body,
+      requester_person_id: parseInt(req.body.requester_person_id),
+      unit_id: parseInt(req.body.unit_id),
+      items: req.body.items ? JSON.parse(req.body.items) : [],
+    }
+
+    const result = await service.createRequest(pool, data, req.user.id, oficioPath, oficioOriginalName)
     await logAudit(req.user.id, 'request_created', 'requests', result.id,
       { type: result.type, protocol: result.protocol }, req.ip)
     res.status(201).json(result)
   } catch (err) {
-    res.status(400).json({ message: err.message })
+    // Remove arquivo enviado se a criação falhou
+    if (oficioPath && fs.existsSync(oficioPath)) {
+      try { fs.unlinkSync(oficioPath) } catch (_) {}
+    }
+    const status = err.message.includes('obrigatório') || err.message.includes('inválid') ||
+                   err.message.includes('item') || err.message.includes('ofício') ? 400 : 500
+    res.status(status).json({ message: err.message })
   }
 }
 
