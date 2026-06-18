@@ -71,7 +71,6 @@ export interface StatusHistoryEntry {
 export interface LinkedMovement {
   id: number
   movement_type: string
-  status: string
   delivery_status: string
   responsible_name?: string
   asset_count: number

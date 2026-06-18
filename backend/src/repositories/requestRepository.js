@@ -250,7 +250,7 @@ async function findStatusHistory(pool, requestId) {
 
 async function findMovementsByRequestId(pool, requestId) {
   const result = await pool.query(
-    `SELECT am.id, am.movement_type, am.status, am.delivery_status,
+    `SELECT am.id, am.movement_type, am.delivery_status,
             am.created_at, u.full_name AS responsible_name,
             COUNT(ma.asset_id) AS asset_count
      FROM asset_movements am
