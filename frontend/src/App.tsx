@@ -37,6 +37,7 @@ import DashboardView from './components/DashboardView';
 import CdInventoryPage from './components/CdInventoryPage';
 import PendingTermsList from './components/PendingTermsList';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
+import RequestsPage from './components/RequestsPage';
 
 
 // --- LISTAS PADRÃO PARA COMBOS (DROPDOWNS) ---
@@ -1169,8 +1170,8 @@ const DashboardPage = () => {
       subMenus: [
         { name: 'Registrar Movimentação', icon: PlusCircle, id: 'action-register-movement', roles: PERMISSIONS.ACTION_REGISTER_MOVEMENT },
         { name: 'Gerenciar Movimentações', icon: ArrowRightLeft, id: 'manage-external', roles: PERMISSIONS.MENU_LOGISTICA },
-        // >>> MUDANÇA AQUI: A Logística Reversa agora mora aqui <<<
         { name: 'Logística Reversa (Coleta)', icon: ArchiveRestore, id: 'batch-collection', roles: PERMISSIONS.ACTION_REGISTER_MOVEMENT },
+        { name: 'Solicitações de TI', icon: Inbox, id: 'requests-ti', roles: PERMISSIONS.MENU_LOGISTICA },
       ]
     },
 
@@ -2483,6 +2484,9 @@ const DashboardPage = () => {
               units={units}
             />
           )}
+          {activeMenu === 'requests-ti' && (
+            <RequestsPage currentUserRole={user?.role || ''} />
+          )}
           {/* >>> NOVA PÁGINA DE MONITORAMENTO <<< */}
           {activeMenu === 'tablet-dashboard' && (
             <TabletDashboard
@@ -3071,6 +3075,7 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
   const [expectedReturnDate, setExpectedReturnDate] = useState<string>('');
   const [requestChannelType, setRequestChannelType] = useState<'Email' | 'SEI' | 'Ordem Direta' | ''>('');
   const [requestChannelDetails, setRequestChannelDetails] = useState<string>('');
+  const [linkedRequestId, setLinkedRequestId] = useState<string>(''); // Protocolo opcional de solicitação aprovada
 
   // Estado dos periféricos padrão (Checkboxes)
   const [checkedPeripherals, setCheckedPeripherals] = useState<{ [key: string]: boolean }>({});
@@ -3213,6 +3218,7 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
       expected_return_date: movementType === 'loan' ? expectedReturnDate : undefined,
       request_channel_type: requestChannelType || undefined,
       request_channel_details: requestChannelDetails || undefined,
+      request_id: linkedRequestId ? parseInt(linkedRequestId) : undefined,
       peripherals: peripheralsList, // Envia a lista completa
       asset_updates: assetUpdates // Dados técnicos (IMEI/CHIP)
     };
@@ -3611,6 +3617,11 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
                     <option value="">Selecione...</option> <option value="Email">E-mail</option> <option value="SEI">SEI</option> <option value="Ordem Direta">Ordem Direta</option>
                   </select>
                   {requestChannelType === 'SEI' ? (<InputMask mask="99.999999/9999-99" value={requestChannelDetails} onChange={(e) => setRequestChannelDetails(e.target.value)}>{(inputProps: any) => <input {...inputProps} type="text" placeholder="Número do SEI" className="mt-2 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm disabled:bg-gray-100" required />}</InputMask>) : requestChannelType === 'Ordem Direta' && (<input type="text" placeholder="Nome e Cargo" value={requestChannelDetails} onChange={(e) => setRequestChannelDetails(e.target.value)} className="mt-2 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm disabled:bg-gray-100" required />)}
+                </div>
+                <div>
+                  <label htmlFor="linkedRequestId" className="block text-sm font-medium text-gray-700">Protocolo de Solicitação de TI <span className="text-xs text-gray-400 font-normal">(opcional)</span></label>
+                  <input type="text" id="linkedRequestId" value={linkedRequestId} onChange={(e) => setLinkedRequestId(e.target.value.replace(/\D/g, ''))} placeholder="ID numérico da solicitação aprovada" className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm disabled:bg-gray-100" />
+                  <p className="mt-1 text-xs text-gray-400">Preencha para vincular esta movimentação a uma Solicitação de TI aprovada.</p>
                 </div>
                 <div>
                   <label htmlFor="expectedReturnDate" className="block text-sm font-medium text-gray-700">Data Prevista Para Devolução</label>

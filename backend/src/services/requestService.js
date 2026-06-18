@@ -1,0 +1,300 @@
+// services/requestService.js
+// Camada de regras de negócio — sem SQL direto, sem req/res
+
+const repository = require('../repositories/requestRepository')
+
+// ─── Tipos e canais válidos ────────────────────────────────────────────────
+
+const VALID_TYPES = ['emprestimo', 'substituicao', 'acrescimo']
+
+// Canais permitidos por tipo
+const CHANNELS_BY_TYPE = {
+  emprestimo:   ['email', 'sei'],
+  substituicao: ['chamado', 'sei', 'email'],
+  acrescimo:    ['sei', 'email'],
+}
+
+// ─── Máquina de estados ────────────────────────────────────────────────────
+//
+// Fluxo unificado para todos os tipos:
+//
+//   requisitado
+//     → visita_tecnica_solicitada  (opcional, não vinculante)
+//     → aguardando_aprovacao       (pular visita diretamente)
+//
+//   visita_tecnica_solicitada
+//     → visita_realizada
+//
+//   visita_realizada
+//     → aguardando_aprovacao
+//
+//   aguardando_aprovacao
+//     → aprovado   (gerência aprova — bloqueante)
+//     → reprovado
+//
+//   aprovado
+//     → em_execucao  (auto via movement com request_id)
+//
+//   em_execucao
+//     → concluido    (auto via movement confirmed)
+//
+//   Cancelamento: qualquer estado não-terminal → cancelado (manager/admin)
+//
+// TRANSITIONS[fromStatus][toStatus] = [roles que podem executar]
+
+const TRANSITIONS = {
+  requisitado: {
+    visita_tecnica_solicitada: ['basic', 'operator', 'manager', 'admin'],
+    aguardando_aprovacao:      ['manager', 'admin'],
+    cancelado:                 ['manager', 'admin'],
+  },
+  visita_tecnica_solicitada: {
+    visita_realizada: ['basic', 'operator', 'manager', 'admin'],
+    cancelado:        ['manager', 'admin'],
+  },
+  visita_realizada: {
+    aguardando_aprovacao: ['manager', 'admin'],
+    cancelado:            ['manager', 'admin'],
+  },
+  aguardando_aprovacao: {
+    aprovado:   ['manager', 'admin'],
+    reprovado:  ['manager', 'admin'],
+    cancelado:  ['manager', 'admin'],
+  },
+  // aprovado → em_execucao e em_execucao → concluido são disparados
+  // automaticamente pelo updateRequestStatus (via movement), mas também
+  // podem ser acionados manualmente por manager/admin se necessário.
+  aprovado: {
+    em_execucao: ['basic', 'operator', 'manager', 'admin'],
+    cancelado:   ['manager', 'admin'],
+  },
+  em_execucao: {
+    concluido: ['basic', 'operator', 'manager', 'admin'],
+    cancelado: ['manager', 'admin'],
+  },
+}
+
+// Statuses que encerram o ciclo de vida da solicitação
+const TERMINAL_STATUSES = ['concluido', 'reprovado', 'cancelado']
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+function getAllowedTransitions(request, role) {
+  const fromMap = TRANSITIONS[request.status] || {}
+  return Object.entries(fromMap)
+    .filter(([, roles]) => roles.includes(role))
+    .map(([toStatus]) => toStatus)
+}
+
+// ─── Criação ───────────────────────────────────────────────────────────────
+
+async function createRequest(pool, data, currentUserId) {
+  if (!data.type || !data.requester_person_id || !data.unit_id) {
+    throw new Error('Campos obrigatórios: type, requester_person_id, unit_id.')
+  }
+  if (!VALID_TYPES.includes(data.type)) {
+    throw new Error(`Tipo inválido. Use: ${VALID_TYPES.join(', ')}.`)
+  }
+
+  const personOk = await repository.personExists(pool, data.requester_person_id)
+  if (!personOk) throw new Error('Solicitante não encontrado.')
+
+  const unit = await repository.findUnitById(pool, data.unit_id)
+  if (!unit) throw new Error('Unidade não encontrada.')
+
+  // Canal de entrada
+  if (!data.input_channel) throw new Error('Canal de entrada é obrigatório.')
+  const validChannels = CHANNELS_BY_TYPE[data.type] || []
+  if (!validChannels.includes(data.input_channel)) {
+    throw new Error(`Canal inválido para ${data.type}. Use: ${validChannels.join(', ')}.`)
+  }
+
+  // Validações específicas por tipo
+  if (data.type === 'substituicao') {
+    if (!data.fundamentacao) throw new Error('Fundamentação é obrigatória para substituições.')
+    if (data.fundamentacao === 'avaria' && data.input_channel !== 'chamado') {
+      throw new Error('Substituição por avaria deve usar canal "chamado".')
+    }
+    if (data.fundamentacao === 'necessidade_operacional' && data.input_channel === 'chamado') {
+      throw new Error('Canal "chamado" é exclusivo para substituições por avaria.')
+    }
+  }
+
+  if (data.input_channel === 'sei' && !data.input_channel_details) {
+    throw new Error('Número do processo SEI é obrigatório.')
+  }
+  if (data.input_channel === 'chamado' && !data.input_channel_details) {
+    throw new Error('Número do chamado é obrigatório.')
+  }
+
+  return repository.create(pool, { ...data, created_by: currentUserId })
+}
+
+// ─── Consultas ────────────────────────────────────────────────────────────
+
+async function listRequests(pool, filters) {
+  return repository.findAll(pool, filters)
+}
+
+async function getRequestById(pool, id, currentUser) {
+  const request = await repository.findById(pool, id)
+  if (!request) throw new Error('Solicitação não encontrada.')
+
+  const [visits, history, movements] = await Promise.all([
+    repository.findTechnicalVisitsByRequestId(pool, id),
+    repository.findStatusHistory(pool, id),
+    repository.findMovementsByRequestId(pool, id),
+  ])
+
+  const allowed_transitions = currentUser
+    ? getAllowedTransitions(request, currentUser.role)
+    : []
+
+  return { ...request, visits, history, movements, allowed_transitions }
+}
+
+// ─── Transições de status ─────────────────────────────────────────────────
+
+async function changeStatus(pool, requestId, newStatus, currentUser, notes) {
+  const request = await repository.findById(pool, requestId)
+  if (!request) throw new Error('Solicitação não encontrada.')
+
+  if (TERMINAL_STATUSES.includes(request.status)) {
+    throw new Error(`Solicitação já está em status terminal (${request.status}).`)
+  }
+
+  const allowedRoles = TRANSITIONS[request.status]?.[newStatus]
+  if (!allowedRoles) {
+    throw new Error(
+      `Transição de '${request.status}' para '${newStatus}' não é permitida.`
+    )
+  }
+  if (!allowedRoles.includes(currentUser.role)) {
+    throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para esta transição.`)
+  }
+
+  return repository.transitionStatus(
+    pool, requestId, newStatus, currentUser.id, notes, null, request.status
+  )
+}
+
+// ─── Visita técnica ────────────────────────────────────────────────────────
+
+async function scheduleTechnicalVisit(pool, requestId, data, currentUserId) {
+  const request = await repository.findById(pool, requestId)
+  if (!request) throw new Error('Solicitação não encontrada.')
+
+  if (!['requisitado', 'visita_tecnica_solicitada'].includes(request.status)) {
+    throw new Error('Visita técnica disponível apenas para solicitações no início do fluxo.')
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const visit = await repository.createTechnicalVisit(pool, {
+      request_id:    requestId,
+      assigned_to:   data.assigned_to || null,
+      scheduled_date: data.scheduled_date || null,
+      created_by:    currentUserId,
+    })
+
+    // Avança o status se ainda em 'requisitado'
+    if (request.status === 'requisitado') {
+      await client.query(
+        `UPDATE requests SET status = 'visita_tecnica_solicitada', updated_at = NOW() WHERE id = $1`,
+        [requestId]
+      )
+      await client.query(
+        `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+         VALUES ($1, 'requisitado', 'visita_tecnica_solicitada', 'Visita técnica agendada.', $2)`,
+        [requestId, currentUserId]
+      )
+    }
+
+    await client.query('COMMIT')
+    return visit
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+async function completeTechnicalVisit(pool, visitId, result, findings, currentUserId) {
+  if (!result || !['constatada', 'nao_constatada'].includes(result)) {
+    throw new Error('Resultado da visita é obrigatório: "constatada" ou "nao_constatada".')
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const visitRes = await client.query(
+      'SELECT * FROM technical_visits WHERE id = $1 FOR UPDATE',
+      [visitId]
+    )
+    if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
+    const visit = visitRes.rows[0]
+    if (visit.completed_at) throw new Error('Esta visita já foi concluída.')
+
+    await client.query(
+      `UPDATE technical_visits
+       SET result = $1, findings = $2, completed_by = $3, completed_at = NOW()
+       WHERE id = $4`,
+      [result, findings || null, currentUserId, visitId]
+    )
+
+    // Avança o status da solicitação para visita_realizada
+    await client.query(
+      `UPDATE requests SET status = 'visita_realizada', updated_at = NOW() WHERE id = $1`,
+      [visit.request_id]
+    )
+    await client.query(
+      `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+       VALUES ($1, 'visita_tecnica_solicitada', 'visita_realizada', $2, $3)`,
+      [
+        visit.request_id,
+        `Visita concluída. Resultado: ${result === 'constatada' ? 'Defeito constatado' : 'Defeito não constatado'}.${findings ? ' Parecer: ' + findings : ''}`,
+        currentUserId,
+      ]
+    )
+
+    await client.query('COMMIT')
+    return { visit_id: visitId, result, request_id: visit.request_id }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+// ─── Acoplamento com movimentações ────────────────────────────────────────
+// Chamada pelo server.js após COMMIT de cada movimentação que tenha request_id.
+
+async function updateRequestFromMovement(pool, requestId, movementStatus, userId) {
+  return repository.updateRequestStatus(
+    pool, requestId, movementStatus, userId,
+    `Status atualizado automaticamente via movimentação.`
+  )
+}
+
+// ─── Busca de solicitações aprovadas (para pré-preenchimento no form de movimentação) ─
+
+async function findApprovedRequest(pool, requestId) {
+  return repository.findApprovedRequestById(pool, requestId)
+}
+
+module.exports = {
+  createRequest,
+  listRequests,
+  getRequestById,
+  changeStatus,
+  scheduleTechnicalVisit,
+  completeTechnicalVisit,
+  updateRequestFromMovement,
+  findApprovedRequest,
+  getAllowedTransitions,
+}

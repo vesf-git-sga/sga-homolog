@@ -26,6 +26,32 @@ export const translateMovementType = (type: string): string => {
     return typeMap[type] || type;
 };
 
+// ─── Módulo de Solicitações de TI ────────────────────────────────────────────
+
+export const REQUEST_TYPE_LABELS: Record<string, string> = {
+  emprestimo:   'Empréstimo',
+  substituicao: 'Substituição',
+  acrescimo:    'Acréscimo',
+}
+
+export const REQUEST_STATUS_LABELS: Record<string, string> = {
+  requisitado:               'Requisitado',
+  visita_tecnica_solicitada: 'Visita Técnica Solicitada',
+  visita_realizada:          'Visita Realizada',
+  aguardando_aprovacao:      'Aguardando Aprovação',
+  aprovado:                  'Aprovado',
+  reprovado:                 'Reprovado',
+  em_execucao:               'Em Execução',
+  concluido:                 'Concluído',
+  cancelado:                 'Cancelado',
+}
+
+export const REQUEST_CHANNEL_LABELS: Record<string, string> = {
+  email:   'E-mail',
+  sei:     'SEI',
+  chamado: 'Chamado',
+}
+
 // Função para traduzir os tipos de ações de auditoria
 export const translateActionType = (type: string): string => {
     const typeMap: { [key: string]: string } = {

@@ -8191,7 +8191,8 @@ app.post('/api/asset-movements', authenticateToken, authorizePermission('ACTION_
         purpose, expected_return_date, notes, destination_unit_id,
         request_channel_type, request_channel_details, peripherals, returned_peripherals,
         return_condition,
-        asset_updates // <<< NOVO: Objeto com atualizações { assetId: { imei: '...', sim_card_number: '...' } }
+        asset_updates, // <<< NOVO: Objeto com atualizações { assetId: { imei: '...', sim_card_number: '...' } }
+        request_id     // <<< Solicitação de TI vinculada (opcional)
     } = req.body;
 
     const responsible_user_id = req.user.id;
@@ -8266,16 +8267,17 @@ app.post('/api/asset-movements', authenticateToken, authorizePermission('ACTION_
         const newMovementResult = await client.query(
             `INSERT INTO asset_movements (
            movement_type, responsible_user_id, recipient_person_id, recipient_name, recipient_document,
-           purpose, expected_return_date, notes, destination_unit_id, 
+           purpose, expected_return_date, notes, destination_unit_id,
            request_channel_type, request_channel_details, delivery_status,
-           receipt_path, actual_delivery_date, movement_date
+           receipt_path, actual_delivery_date, movement_date, request_id
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()) RETURNING id`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), $15) RETURNING id`,
             [
                 movement_type, responsible_user_id, recipient_person_id, recipient_name || null, recipient_document || null,
                 purpose || null, expected_return_date || null, notes || null, destination_unit_id,
                 request_channel_type || null, request_channel_details || null,
-                deliveryStatus, receiptPath, actualDeliveryDate
+                deliveryStatus, receiptPath, actualDeliveryDate,
+                request_id ? parseInt(request_id) : null
             ]
         );
         const newMovementId = newMovementResult.rows[0].id;
@@ -8341,6 +8343,16 @@ app.post('/api/asset-movements', authenticateToken, authorizePermission('ACTION_
 
         await client.query('COMMIT');
         await logAudit(req.user.id, 'create_movement', 'asset_movement', newMovementId, { type: movement_type, assets: asset_ids }, ipAddress);
+
+        // Atualiza status da Solicitação de TI vinculada (fora da transação principal para não reverter em caso de falha)
+        if (request_id) {
+            try {
+                const requestRepository = require('./repositories/requestRepository');
+                await requestRepository.updateRequestStatus(pool, parseInt(request_id), deliveryStatus, req.user.id);
+            } catch (requestErr) {
+                console.error(`[Solicitações] Erro ao atualizar status da solicitação ${request_id}:`, requestErr.message);
+            }
+        }
 
         res.status(201).json({ message: 'Movimentação registrada com sucesso!', movement_id: newMovementId });
 
@@ -12812,6 +12824,10 @@ app.post('/api/catalog/models', authenticateToken, async (req, res) => {
         res.status(201).json({ id: result.rows[0].id, name: cleanName });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ─── Módulo de Solicitações de TI ────────────────────────────────────────────
+const requestsRouter = require('./routes/requests');
+app.use('/api', requestsRouter(pool, authenticateToken, authorizePermission, logAudit));
 
 // Inicia o servidor
 app.listen(PORT, () => {
