@@ -2261,6 +2261,37 @@ const DashboardPage = () => {
                         >
                           <Download className="w-3 h-3 mr-2" /> Resumo por Escola (XLSX)
                         </button>
+                        <div className="border-t border-amber-200 mt-1 pt-2">
+                          <p className="text-xs text-amber-700 font-semibold mb-1.5 text-center">Relatório Final de Execução</p>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={async () => {
+                                addToast('Gerando relatório histórico (PDF)...', 'info');
+                                try {
+                                  const response = await axios.get(`${API_URL}/reports/tablets/historical/pdf`, { responseType: 'blob' });
+                                  const url = window.URL.createObjectURL(new Blob([response.data]));
+                                  const link = document.createElement('a'); link.href = url; link.setAttribute('download', 'Relatorio_Historico_Tablets.pdf'); document.body.appendChild(link); link.click(); link.parentNode?.removeChild(link);
+                                } catch (e) { addToast('Erro ao gerar relatório histórico.', 'error'); }
+                              }}
+                              className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2 rounded-lg font-bold shadow flex items-center justify-center transition-colors text-xs"
+                            >
+                              <FileText className="w-3 h-3 mr-1" /> PDF Gerencial
+                            </button>
+                            <button
+                              onClick={async () => {
+                                addToast('Gerando relatório histórico (XLSX)...', 'info');
+                                try {
+                                  const response = await axios.get(`${API_URL}/reports/tablets/historical/xlsx`, { responseType: 'blob' });
+                                  const url = window.URL.createObjectURL(new Blob([response.data]));
+                                  const link = document.createElement('a'); link.href = url; link.setAttribute('download', 'Relatorio_Historico_Tablets.xlsx'); document.body.appendChild(link); link.click(); link.parentNode?.removeChild(link);
+                                } catch (e) { addToast('Erro ao gerar relatório histórico.', 'error'); }
+                              }}
+                              className="flex-1 bg-white border border-amber-600 text-amber-700 hover:bg-amber-50 py-2 rounded-lg font-bold flex items-center justify-center transition-colors text-xs"
+                            >
+                              <Download className="w-3 h-3 mr-1" /> XLSX Análise
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>

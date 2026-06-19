@@ -1230,6 +1230,657 @@ app.get('/api/reports/tablets/consolidated/xlsx', authenticateToken, authorizePe
     }
 });
 
+// =====================================================================
+// RELATÓRIO HISTÓRICO DE EXECUÇÃO — ANÁLISE FINAL DO PERÍODO
+// =====================================================================
+
+app.get('/api/reports/tablets/historical/pdf', authenticateToken, authorizePermission('MENU_ESCOLAR'), async (req, res) => {
+    try {
+        // ── 1. Sumário Executivo ──────────────────────────────────────
+        const [sumario, periodo, leadtime, termosPendentes] = await Promise.all([
+            pool.query(`
+                SELECT
+                    (SELECT COUNT(*) FROM tablet_eligible_students) AS total_elegiveis,
+                    (SELECT COUNT(*) FROM delivery_batch_items WHERE delivery_status IN ('realizada','confirmed')) AS total_entregues,
+                    (SELECT COUNT(*) FROM delivery_batch_items WHERE delivery_status = 'devolvido') AS total_devolvidos,
+                    (SELECT COUNT(*) FROM delivery_batch_items WHERE delivery_status = 'planejada') AS total_planejados,
+                    (SELECT COUNT(*) FROM tablet_eligible_students WHERE requires_livox = TRUE) AS pcd_elegiveis,
+                    (SELECT COUNT(*) FROM delivery_batch_items dbi JOIN tablet_eligible_students s ON dbi.eligible_student_id = s.id WHERE s.requires_livox = TRUE AND dbi.delivery_status IN ('realizada','confirmed')) AS pcd_entregues,
+                    (SELECT COUNT(*) FROM delivery_batches) AS total_lotes,
+                    (SELECT COUNT(*) FROM delivery_batches WHERE delivery_confirmation_date IS NOT NULL AND scheduled_delivery_date IS NOT NULL AND delivery_confirmation_date > scheduled_delivery_date) AS lotes_atrasados,
+                    (SELECT COUNT(DISTINCT school_unit_id) FROM delivery_batch_items dbi2 JOIN delivery_batches db2 ON dbi2.batch_id = db2.id) AS escolas_atendidas,
+                    (SELECT COUNT(DISTINCT school_unit_id) FROM tablet_eligible_students) AS escolas_elegiveis
+            `),
+            pool.query(`SELECT MIN(delivery_date) AS inicio, MAX(delivery_date) AS fim FROM delivery_batch_items WHERE delivery_status IN ('realizada','confirmed') AND delivery_date IS NOT NULL`),
+            pool.query(`SELECT ROUND(AVG(EXTRACT(EPOCH FROM (delivery_confirmation_date - creation_date))/86400)::numeric, 1) AS media FROM delivery_batches WHERE delivery_confirmation_date IS NOT NULL`),
+            pool.query(`SELECT COUNT(*) AS pendentes FROM delivery_batches WHERE terms_status = 'pending'`)
+        ]);
+
+        const s = sumario.rows[0];
+        const totalElegiveis = parseInt(s.total_elegiveis);
+        const totalEntregues = parseInt(s.total_entregues);
+        const totalDevolvidos = parseInt(s.total_devolvidos);
+        const totalPlanejados = parseInt(s.total_planejados);
+        const totalPendentes = totalElegiveis - totalEntregues - totalDevolvidos - totalPlanejados;
+        const taxaGlobal = ((totalEntregues / totalElegiveis) * 100).toFixed(1);
+        const pcdElegiveis = parseInt(s.pcd_elegiveis);
+        const pcdEntregues = parseInt(s.pcd_entregues);
+        const taxaPcd = ((pcdEntregues / pcdElegiveis) * 100).toFixed(1);
+
+        const dataInicio = periodo.rows[0].inicio ? new Date(periodo.rows[0].inicio).toLocaleDateString('pt-BR') : '-';
+        const dataFim    = periodo.rows[0].fim    ? new Date(periodo.rows[0].fim).toLocaleDateString('pt-BR')    : '-';
+        const duracao = periodo.rows[0].inicio && periodo.rows[0].fim
+            ? Math.round((new Date(periodo.rows[0].fim) - new Date(periodo.rows[0].inicio)) / 86400000) + 1
+            : 0;
+        const velMedia = duracao > 0 ? Math.round(totalEntregues / duracao) : 0;
+        const leadMediaDias = leadtime.rows[0].media || '-';
+
+        // ── 2. Por RPA ───────────────────────────────────────────────
+        const rpaResult = await pool.query(`
+            SELECT s.rpa,
+                COUNT(DISTINCT s.id) AS elegiveis,
+                COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada','confirmed') THEN s.id END) AS entregues,
+                COUNT(DISTINCT CASE WHEN s.requires_livox = TRUE THEN s.id END) AS pcd_elegiveis,
+                COUNT(DISTINCT CASE WHEN s.requires_livox = TRUE AND dbi.delivery_status IN ('realizada','confirmed') THEN s.id END) AS pcd_entregues
+            FROM tablet_eligible_students s
+            LEFT JOIN delivery_batch_items dbi ON dbi.eligible_student_id = s.id
+            GROUP BY s.rpa ORDER BY s.rpa
+        `);
+
+        // ── 3. Tipos PCD ─────────────────────────────────────────────
+        const pcdTypes = await pool.query(`
+            SELECT TRIM(pcd_type) AS tipo, COUNT(*) AS qtd
+            FROM tablet_eligible_students WHERE requires_livox = TRUE
+            GROUP BY TRIM(pcd_type) ORDER BY COUNT(*) DESC LIMIT 8
+        `);
+
+        // ── 4. Timeline semanal ──────────────────────────────────────
+        const timeline = await pool.query(`
+            SELECT TO_CHAR(DATE_TRUNC('week', dbi.delivery_date), 'DD/MM/YYYY') AS semana,
+                COUNT(*) AS entregas
+            FROM delivery_batch_items dbi
+            WHERE dbi.delivery_status IN ('realizada','confirmed') AND dbi.delivery_date IS NOT NULL
+            GROUP BY DATE_TRUNC('week', dbi.delivery_date)
+            ORDER BY DATE_TRUNC('week', dbi.delivery_date)
+        `);
+
+        // ── 5. Escolas com 0% entrega ────────────────────────────────
+        const semEntrega = await pool.query(`
+            SELECT u.name AS escola, s.rpa, COUNT(DISTINCT s.id) AS pendentes
+            FROM tablet_eligible_students s
+            JOIN units u ON s.school_unit_id = u.id
+            LEFT JOIN delivery_batch_items dbi ON dbi.eligible_student_id = s.id AND dbi.delivery_status IN ('realizada','confirmed')
+            GROUP BY u.name, s.rpa
+            HAVING COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada','confirmed') THEN s.id END) = 0
+            ORDER BY COUNT(DISTINCT s.id) DESC
+        `);
+
+        const logoPath = path.join(__dirname, '../assets/brasao-recife.png');
+        let logoBase64 = null;
+        if (fs.existsSync(logoPath)) logoBase64 = fs.readFileSync(logoPath, 'base64');
+
+        const headerDef = {
+            margin: [30, 15, 30, 5],
+            columns: [
+                logoBase64 ? { image: `data:image/png;base64,${logoBase64}`, width: 36, margin: [0, 4, 0, 0] } : { text: '', width: 36 },
+                { stack: [
+                    { text: 'PREFEITURA DO RECIFE — SECRETARIA DE EDUCAÇÃO', style: 'headerTop', alignment: 'center' },
+                    { text: 'RELATÓRIO DE ANÁLISE HISTÓRICA — ENTREGA DE TABLETS', style: 'headerMain', alignment: 'center' },
+                    { text: 'Referência: Período de Execução da Política Pública', style: 'headerSub', alignment: 'center' }
+                ]}
+            ]
+        };
+
+        const footerFn = (page, pages) => ({
+            margin: [30, 5, 30, 0],
+            columns: [
+                { text: `Emitido em: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}`, fontSize: 7, color: '#888888' },
+                { text: `Página ${page} de ${pages}`, fontSize: 7, color: '#888888', alignment: 'right' }
+            ]
+        });
+
+        const sectionTitle = (txt) => ({ text: txt, style: 'sectionTitle', margin: [0, 16, 0, 6] });
+        const kpiRow = (items) => ({
+            columns: items.map(([label, value, sub]) => ({
+                stack: [
+                    { text: label, style: 'kpiLabel' },
+                    { text: value, style: 'kpiValue' },
+                    sub ? { text: sub, style: 'kpiSub' } : {}
+                ],
+                margin: [4, 0, 4, 0]
+            })),
+            margin: [0, 2, 0, 8]
+        });
+
+        const tableHeader = (cols) => cols.map(c => ({ text: c, style: 'tblHeader' }));
+
+        const docDefinition = {
+            pageSize: 'A4',
+            pageOrientation: 'portrait',
+            pageMargins: [35, 90, 35, 45],
+            header: headerDef,
+            footer: footerFn,
+            content: [
+                // ── PÁGINA 1: SUMÁRIO EXECUTIVO ──
+                sectionTitle('1. SUMÁRIO EXECUTIVO'),
+                { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1.5, lineColor: '#1e3a8a' }], margin: [0, 0, 0, 10] },
+                { text: `Período de execução: ${dataInicio} a ${dataFim}  |  Duração: ${duracao} dias`, style: 'periodLabel', margin: [0, 0, 0, 12] },
+                kpiRow([
+                    ['TOTAL ELEGÍVEIS', totalElegiveis.toLocaleString('pt-BR'), 'Base de alunos'],
+                    ['TOTAL ENTREGUES', totalEntregues.toLocaleString('pt-BR'), `Taxa: ${taxaGlobal}%`],
+                    ['PENDENTES', (totalPendentes + totalPlanejados).toLocaleString('pt-BR'), 'Não confirmados']
+                ]),
+                kpiRow([
+                    ['DEVOLVIDOS', totalDevolvidos.toLocaleString('pt-BR'), 'Retornados'],
+                    ['ESCOLAS ATENDIDAS', `${s.escolas_atendidas} / ${s.escolas_elegiveis}`, 'Com ao menos 1 entrega'],
+                    ['VELOCIDADE MÉDIA', `${velMedia} tablets/dia`, `em ${duracao} dias`]
+                ]),
+                kpiRow([
+                    ['TOTAL LOTES', parseInt(s.total_lotes).toLocaleString('pt-BR'), 'Remessas criadas'],
+                    ['LOTES COM ATRASO', parseInt(s.lotes_atrasados).toLocaleString('pt-BR'), `${((parseInt(s.lotes_atrasados)/parseInt(s.total_lotes))*100).toFixed(0)}% do total`],
+                    ['LEAD TIME MÉDIO', `${leadMediaDias} dias`, 'Criação → Confirmação']
+                ]),
+                kpiRow([
+                    ['ELEGÍVEIS PCD (Livox)', pcdElegiveis.toLocaleString('pt-BR'), 'Necessitam Livox'],
+                    ['ENTREGUES PCD', pcdEntregues.toLocaleString('pt-BR'), `Taxa: ${taxaPcd}%`],
+                    ['TERMOS PENDENTES', parseInt(termosPendentes.rows[0].pendentes).toLocaleString('pt-BR'), 'Assinatura em aberto']
+                ]),
+
+                // ── SEÇÃO 2: DESEMPENHO POR RPA ──
+                { text: '', pageBreak: 'before' },
+                sectionTitle('2. DESEMPENHO POR REGIONAL POLÍTICO-ADMINISTRATIVA (RPA)'),
+                { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1.5, lineColor: '#1e3a8a' }], margin: [0, 0, 0, 10] },
+                {
+                    table: {
+                        headerRows: 1,
+                        widths: [40, 70, 70, 55, 55, 55, 50, 50],
+                        body: [
+                            tableHeader(['RPA', 'Elegíveis', 'Entregues', 'Taxa (%)', 'Pendentes', 'PCD Eleg.', 'PCD Entr.', 'Taxa PCD']),
+                            ...rpaResult.rows.map(r => {
+                                const el = parseInt(r.elegiveis);
+                                const en = parseInt(r.entregues);
+                                const pe = parseInt(r.pcd_elegiveis);
+                                const pc = parseInt(r.pcd_entregues);
+                                const taxa = el > 0 ? ((en/el)*100).toFixed(1) : '0.0';
+                                const taxaP = pe > 0 ? ((pc/pe)*100).toFixed(1) : '-';
+                                const pendentes = el - en;
+                                const isGargalo = parseFloat(taxa) < 95;
+                                return [
+                                    { text: r.rpa || '-', alignment: 'center' },
+                                    { text: el.toLocaleString('pt-BR'), alignment: 'center' },
+                                    { text: en.toLocaleString('pt-BR'), alignment: 'center' },
+                                    { text: `${taxa}%`, alignment: 'center', bold: isGargalo, color: isGargalo ? '#b91c1c' : '#15803d' },
+                                    { text: pendentes.toLocaleString('pt-BR'), alignment: 'center', color: pendentes > 0 ? '#b45309' : '#111827' },
+                                    { text: pe.toLocaleString('pt-BR'), alignment: 'center' },
+                                    { text: pc.toLocaleString('pt-BR'), alignment: 'center' },
+                                    { text: taxaP !== '-' ? `${taxaP}%` : '-', alignment: 'center' }
+                                ];
+                            }),
+                            // Linha de totais
+                            (() => {
+                                const totEl = rpaResult.rows.reduce((a, r) => a + parseInt(r.elegiveis), 0);
+                                const totEn = rpaResult.rows.reduce((a, r) => a + parseInt(r.entregues), 0);
+                                const totPe = rpaResult.rows.reduce((a, r) => a + parseInt(r.pcd_elegiveis), 0);
+                                const totPc = rpaResult.rows.reduce((a, r) => a + parseInt(r.pcd_entregues), 0);
+                                return [
+                                    { text: 'TOTAL', style: 'tblHeader', colSpan: 1 },
+                                    { text: totEl.toLocaleString('pt-BR'), style: 'tblHeader' },
+                                    { text: totEn.toLocaleString('pt-BR'), style: 'tblHeader' },
+                                    { text: `${((totEn/totEl)*100).toFixed(1)}%`, style: 'tblHeader' },
+                                    { text: (totEl - totEn).toLocaleString('pt-BR'), style: 'tblHeader' },
+                                    { text: totPe.toLocaleString('pt-BR'), style: 'tblHeader' },
+                                    { text: totPc.toLocaleString('pt-BR'), style: 'tblHeader' },
+                                    { text: `${((totPc/totPe)*100).toFixed(1)}%`, style: 'tblHeader' }
+                                ];
+                            })()
+                        ]
+                    },
+                    layout: 'lightHorizontalLines',
+                    margin: [0, 0, 0, 12]
+                },
+                { text: '* Taxas abaixo de 95% sinalizadas em vermelho.', style: 'nota', margin: [0, 0, 0, 4] },
+
+                // ── SEÇÃO 3: ANÁLISE PCD ──
+                sectionTitle('3. ANÁLISE DE COBERTURA PCD / ACESSIBILIDADE (LIVOX)'),
+                { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1.5, lineColor: '#1e3a8a' }], margin: [0, 0, 0, 10] },
+                {
+                    columns: [
+                        {
+                            stack: [
+                                { text: 'Distribuição por Tipo de Necessidade', style: 'subTitle', margin: [0, 0, 0, 6] },
+                                {
+                                    table: {
+                                        headerRows: 1,
+                                        widths: ['*', 60],
+                                        body: [
+                                            tableHeader(['Tipo de PCD / Necessidade', 'Qtd. Alunos']),
+                                            ...pcdTypes.rows.map(r => [
+                                                { text: r.tipo, fontSize: 8 },
+                                                { text: parseInt(r.qtd).toLocaleString('pt-BR'), alignment: 'center', fontSize: 8 }
+                                            ])
+                                        ]
+                                    },
+                                    layout: 'lightHorizontalLines'
+                                }
+                            ],
+                            width: '60%'
+                        },
+                        {
+                            stack: [
+                                { text: 'Indicadores PCD', style: 'subTitle', margin: [0, 0, 0, 6] },
+                                { text: `${pcdElegiveis.toLocaleString('pt-BR')}`, style: 'kpiValue', margin: [0, 4, 0, 0] },
+                                { text: 'alunos PCD elegíveis', style: 'kpiLabel', margin: [0, 0, 0, 8] },
+                                { text: `${pcdEntregues.toLocaleString('pt-BR')}`, style: 'kpiValue', margin: [0, 0, 0, 0] },
+                                { text: `entregues (${taxaPcd}%)`, style: 'kpiLabel', margin: [0, 0, 0, 8] },
+                                { text: `${(pcdElegiveis - pcdEntregues).toLocaleString('pt-BR')}`, style: 'kpiValue', color: pcdElegiveis - pcdEntregues > 0 ? '#b91c1c' : '#15803d' },
+                                { text: 'ainda pendentes', style: 'kpiLabel' },
+                            ],
+                            width: '40%',
+                            margin: [10, 0, 0, 0]
+                        }
+                    ],
+                    margin: [0, 0, 0, 12]
+                },
+
+                // ── SEÇÃO 4: TIMELINE SEMANAL ──
+                { text: '', pageBreak: 'before' },
+                sectionTitle('4. LINHA DO TEMPO DA EXECUÇÃO — ENTREGAS SEMANAIS'),
+                { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1.5, lineColor: '#1e3a8a' }], margin: [0, 0, 0, 10] },
+                { text: `Total de semanas com atividade: ${timeline.rows.length}  |  Média semanal: ${Math.round(totalEntregues / timeline.rows.length)} tablets`, style: 'periodLabel', margin: [0, 0, 0, 8] },
+                (() => {
+                    let acumulado = 0;
+                    const bodyRows = timeline.rows.map(r => {
+                        acumulado += parseInt(r.entregas);
+                        const pct = ((acumulado / totalEntregues) * 100).toFixed(1);
+                        const isPico = parseInt(r.entregas) === Math.max(...timeline.rows.map(x => parseInt(x.entregas)));
+                        return [
+                            { text: r.semana, alignment: 'center', fontSize: 8, bold: isPico },
+                            { text: parseInt(r.entregas).toLocaleString('pt-BR'), alignment: 'center', fontSize: 8, bold: isPico, color: isPico ? '#1e3a8a' : '#111827' },
+                            {
+                                stack: [{
+                                    canvas: [{
+                                        type: 'rect',
+                                        x: 0, y: 2,
+                                        w: Math.max(2, (parseInt(r.entregas) / Math.max(...timeline.rows.map(x => parseInt(x.entregas)))) * 100),
+                                        h: 8,
+                                        color: isPico ? '#1e3a8a' : '#3b82f6'
+                                    }]
+                                }],
+                                fontSize: 8
+                            },
+                            { text: `${acumulado.toLocaleString('pt-BR')} (${pct}%)`, alignment: 'center', fontSize: 8 }
+                        ];
+                    });
+                    return {
+                        table: {
+                            headerRows: 1,
+                            widths: [80, 70, 'auto', 120],
+                            body: [
+                                tableHeader(['Semana (início)', 'Entregas', 'Volume relativo', 'Acumulado']),
+                                ...bodyRows
+                            ]
+                        },
+                        layout: 'lightHorizontalLines',
+                        margin: [0, 0, 0, 8]
+                    };
+                })(),
+                { text: '* Barra de volume proporcional ao pico semanal. Semana de destaque em negrito.', style: 'nota', margin: [0, 0, 0, 4] },
+
+                // ── SEÇÃO 5: DESTAQUES E ALERTAS ──
+                sectionTitle('5. DESTAQUES OPERACIONAIS E ALERTAS'),
+                { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1.5, lineColor: '#1e3a8a' }], margin: [0, 0, 0, 10] },
+                semEntrega.rows.length > 0 ? {
+                    stack: [
+                        { text: `Escolas sem nenhuma entrega confirmada (${semEntrega.rows.length}):`, style: 'subTitle', margin: [0, 0, 0, 6], color: '#b91c1c' },
+                        {
+                            table: {
+                                headerRows: 1,
+                                widths: [40, '*', 80],
+                                body: [
+                                    tableHeader(['RPA', 'Unidade Escolar', 'Alunos Pendentes']),
+                                    ...semEntrega.rows.map(r => [
+                                        { text: r.rpa || '-', alignment: 'center', fontSize: 8 },
+                                        { text: r.escola, fontSize: 8 },
+                                        { text: parseInt(r.pendentes).toLocaleString('pt-BR'), alignment: 'center', fontSize: 8, color: '#b91c1c', bold: true }
+                                    ])
+                                ]
+                            },
+                            layout: 'lightHorizontalLines',
+                            margin: [0, 0, 0, 10]
+                        }
+                    ]
+                } : { text: 'Nenhuma escola sem entrega registrada.', style: 'nota' },
+                {
+                    ul: [
+                        { text: [{ text: 'Semana de maior volume: ', bold: true }, `${timeline.rows.reduce((m, r) => parseInt(r.entregas) > parseInt(m.entregas) ? r : m).semana} — ${parseInt(timeline.rows.reduce((m, r) => parseInt(r.entregas) > parseInt(m.entregas) ? r : m).entregas).toLocaleString('pt-BR')} tablets entregues`], margin: [0, 2, 0, 2], fontSize: 9 },
+                        { text: [{ text: 'Lotes entregues com atraso: ', bold: true }, `${parseInt(s.lotes_atrasados).toLocaleString('pt-BR')} de ${parseInt(s.total_lotes).toLocaleString('pt-BR')} (${((parseInt(s.lotes_atrasados)/parseInt(s.total_lotes))*100).toFixed(0)}%) — lead time médio: ${leadMediaDias} dias`], margin: [0, 2, 0, 2], fontSize: 9 },
+                        { text: [{ text: 'Termos de responsabilidade com assinatura pendente: ', bold: true }, `${parseInt(termosPendentes.rows[0].pendentes).toLocaleString('pt-BR')} lotes aguardam regularização`], margin: [0, 2, 0, 2], fontSize: 9 },
+                        { text: [{ text: 'Cobertura de acessibilidade: ', bold: true }, `Taxa PCD (${taxaPcd}%) ${parseFloat(taxaPcd) >= parseFloat(taxaGlobal) ? '≥' : '<'} Taxa Geral (${taxaGlobal}%) — política de priorização ${parseFloat(taxaPcd) >= parseFloat(taxaGlobal) ? 'atingiu o objetivo' : 'abaixo da meta geral'}`], margin: [0, 2, 0, 2], fontSize: 9 },
+                    ],
+                    margin: [0, 4, 0, 0]
+                }
+            ],
+            styles: {
+                headerTop:    { fontSize: 8, color: '#4b5563', bold: false },
+                headerMain:   { fontSize: 13, bold: true, color: '#1e3a8a' },
+                headerSub:    { fontSize: 8, color: '#6b7280', italics: true },
+                sectionTitle: { fontSize: 11, bold: true, color: '#1e3a8a' },
+                subTitle:     { fontSize: 9, bold: true, color: '#374151' },
+                periodLabel:  { fontSize: 9, color: '#374151', italics: true },
+                kpiLabel:     { fontSize: 8, color: '#6b7280', alignment: 'center' },
+                kpiValue:     { fontSize: 18, bold: true, color: '#1e3a8a', alignment: 'center' },
+                kpiSub:       { fontSize: 8, color: '#9ca3af', alignment: 'center' },
+                tblHeader:    { bold: true, fontSize: 8, color: 'white', fillColor: '#1e3a8a', alignment: 'center' },
+                nota:         { fontSize: 7, color: '#9ca3af', italics: true }
+            },
+            defaultStyle: { font: 'Roboto', fontSize: 9 }
+        };
+
+        const pdfDoc = printer.createPdfKitDocument(docDefinition);
+        const chunks = [];
+        pdfDoc.on('data', chunk => chunks.push(chunk));
+        pdfDoc.on('end', () => {
+            res.header('Content-Type', 'application/pdf');
+            res.header('Content-Disposition', 'attachment; filename=Relatorio_Historico_Tablets.pdf');
+            res.send(Buffer.concat(chunks));
+        });
+        pdfDoc.end();
+
+    } catch (error) {
+        console.error('Erro ao gerar relatório histórico PDF:', error);
+        res.status(500).json({ message: 'Erro ao gerar o relatório histórico.' });
+    }
+});
+
+app.get('/api/reports/tablets/historical/xlsx', authenticateToken, authorizePermission('MENU_ESCOLAR'), async (req, res) => {
+    try {
+        const ExcelJS = require('exceljs');
+
+        // ── Queries paralelas ─────────────────────────────────────────
+        const [sumQ, rpaQ, timelineQ, pcdTypesQ, schoolsQ, semEntregaQ] = await Promise.all([
+            pool.query(`
+                SELECT
+                    (SELECT COUNT(*) FROM tablet_eligible_students) AS total_elegiveis,
+                    (SELECT COUNT(*) FROM delivery_batch_items WHERE delivery_status IN ('realizada','confirmed')) AS total_entregues,
+                    (SELECT COUNT(*) FROM delivery_batch_items WHERE delivery_status = 'devolvido') AS total_devolvidos,
+                    (SELECT COUNT(*) FROM delivery_batch_items WHERE delivery_status = 'planejada') AS total_planejados,
+                    (SELECT COUNT(*) FROM tablet_eligible_students WHERE requires_livox = TRUE) AS pcd_elegiveis,
+                    (SELECT COUNT(*) FROM delivery_batch_items dbi JOIN tablet_eligible_students s ON dbi.eligible_student_id = s.id WHERE s.requires_livox = TRUE AND dbi.delivery_status IN ('realizada','confirmed')) AS pcd_entregues,
+                    (SELECT COUNT(*) FROM delivery_batches) AS total_lotes,
+                    (SELECT COUNT(*) FROM delivery_batches WHERE delivery_confirmation_date IS NOT NULL AND scheduled_delivery_date IS NOT NULL AND delivery_confirmation_date > scheduled_delivery_date) AS lotes_atrasados,
+                    (SELECT COUNT(DISTINCT school_unit_id) FROM delivery_batch_items dbi2 JOIN delivery_batches db2 ON dbi2.batch_id = db2.id) AS escolas_atendidas,
+                    (SELECT COUNT(DISTINCT school_unit_id) FROM tablet_eligible_students) AS escolas_elegiveis,
+                    (SELECT ROUND(AVG(EXTRACT(EPOCH FROM (delivery_confirmation_date - creation_date))/86400)::numeric,1) FROM delivery_batches WHERE delivery_confirmation_date IS NOT NULL) AS lead_time_medio,
+                    (SELECT COUNT(*) FROM delivery_batches WHERE terms_status = 'pending') AS termos_pendentes,
+                    (SELECT MIN(delivery_date) FROM delivery_batch_items WHERE delivery_status IN ('realizada','confirmed') AND delivery_date IS NOT NULL) AS data_inicio,
+                    (SELECT MAX(delivery_date) FROM delivery_batch_items WHERE delivery_status IN ('realizada','confirmed') AND delivery_date IS NOT NULL) AS data_fim
+            `),
+            pool.query(`
+                SELECT s.rpa,
+                    COUNT(DISTINCT s.id) AS elegiveis,
+                    COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada','confirmed') THEN s.id END) AS entregues,
+                    COUNT(DISTINCT CASE WHEN s.requires_livox=TRUE THEN s.id END) AS pcd_elegiveis,
+                    COUNT(DISTINCT CASE WHEN s.requires_livox=TRUE AND dbi.delivery_status IN ('realizada','confirmed') THEN s.id END) AS pcd_entregues
+                FROM tablet_eligible_students s
+                LEFT JOIN delivery_batch_items dbi ON dbi.eligible_student_id = s.id
+                GROUP BY s.rpa ORDER BY s.rpa
+            `),
+            pool.query(`
+                SELECT TO_CHAR(DATE_TRUNC('week', dbi.delivery_date), 'DD/MM/YYYY') AS semana,
+                    COUNT(*) AS entregas
+                FROM delivery_batch_items dbi
+                WHERE dbi.delivery_status IN ('realizada','confirmed') AND dbi.delivery_date IS NOT NULL
+                GROUP BY DATE_TRUNC('week', dbi.delivery_date)
+                ORDER BY DATE_TRUNC('week', dbi.delivery_date)
+            `),
+            pool.query(`
+                SELECT TRIM(pcd_type) AS tipo, COUNT(*) AS qtd
+                FROM tablet_eligible_students WHERE requires_livox = TRUE
+                GROUP BY TRIM(pcd_type) ORDER BY COUNT(*) DESC
+            `),
+            pool.query(`
+                WITH StudentStatus AS (
+                    SELECT s.school_unit_id, s.id,
+                        MAX(CASE WHEN dbi.delivery_status IN ('realizada','confirmed') THEN 1 ELSE 0 END) AS entregue,
+                        MAX(CASE WHEN dbi.delivery_status = 'planejada' THEN 1 ELSE 0 END) AS planejado,
+                        MAX(CASE WHEN dbi.delivery_status = 'devolvido' THEN 1 ELSE 0 END) AS devolvido,
+                        MAX(CASE WHEN s.requires_livox = TRUE THEN 1 ELSE 0 END) AS pcd,
+                        MAX(CASE WHEN s.requires_livox = TRUE AND dbi.delivery_status IN ('realizada','confirmed') THEN 1 ELSE 0 END) AS pcd_entregue
+                    FROM tablet_eligible_students s
+                    LEFT JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
+                    GROUP BY s.id, s.school_unit_id
+                )
+                SELECT u.name AS escola, COALESCE(u.rpa,'-') AS rpa,
+                    COUNT(ss.id) AS elegiveis,
+                    SUM(ss.entregue) AS entregues,
+                    SUM(ss.planejado) AS planejados,
+                    SUM(ss.devolvido) AS devolvidos,
+                    (COUNT(ss.id) - SUM(ss.entregue) - SUM(ss.planejado) - SUM(ss.devolvido)) AS pendentes,
+                    SUM(ss.pcd) AS pcd_elegiveis,
+                    SUM(ss.pcd_entregue) AS pcd_entregues,
+                    ROUND(100.0 * SUM(ss.entregue) / NULLIF(COUNT(ss.id),0), 1) AS taxa_entrega,
+                    ROUND(100.0 * SUM(ss.pcd_entregue) / NULLIF(SUM(ss.pcd),0), 1) AS taxa_pcd
+                FROM units u
+                JOIN StudentStatus ss ON u.id = ss.school_unit_id
+                GROUP BY u.id, u.name, u.rpa
+                ORDER BY rpa, taxa_entrega ASC, u.name
+            `),
+            pool.query(`
+                SELECT u.name AS escola, s.rpa, COUNT(DISTINCT s.id) AS alunos_pendentes
+                FROM tablet_eligible_students s
+                JOIN units u ON s.school_unit_id = u.id
+                LEFT JOIN delivery_batch_items dbi ON dbi.eligible_student_id = s.id AND dbi.delivery_status IN ('realizada','confirmed')
+                WHERE dbi.id IS NULL
+                GROUP BY u.name, s.rpa ORDER BY COUNT(DISTINCT s.id) DESC LIMIT 20
+            `)
+        ]);
+
+        const s = sumQ.rows[0];
+        const totalElegiveis = parseInt(s.total_elegiveis);
+        const totalEntregues = parseInt(s.total_entregues);
+        const taxaGlobal = ((totalEntregues / totalElegiveis) * 100).toFixed(1);
+
+        const wb = new ExcelJS.Workbook();
+        wb.creator = 'SGA — Sistema de Gestão de Ativos';
+        wb.created = new Date();
+
+        const AZUL = '1e3a8a'; const BRANCO = 'FFFFFF'; const CINZA = 'F5F5F5';
+        const VERDE = '15803d'; const VERMELHO = 'b91c1c'; const LARANJA = 'b45309';
+
+        const applyHeader = (ws, cols) => {
+            ws.addRow(cols.map(c => c.header));
+            const hr = ws.getRow(1);
+            hr.font = { bold: true, color: { argb: BRANCO }, size: 10 };
+            hr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AZUL } };
+            hr.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+            hr.height = 28;
+            ws.columns = cols;
+        };
+
+        const addRow = (ws, data, isEven) => {
+            const r = ws.addRow(data);
+            if (isEven) r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CINZA } };
+            r.alignment = { vertical: 'middle' };
+            return r;
+        };
+
+        // ── ABA 1: SUMÁRIO EXECUTIVO ──────────────────────────────────
+        const ws1 = wb.addWorksheet('1. Sumário Executivo');
+        ws1.columns = [{ width: 38 }, { width: 20 }, { width: 20 }];
+
+        const addKpi = (ws, label, value, obs = '') => {
+            const r = ws.addRow([label, value, obs]);
+            r.getCell(1).font = { color: { argb: '374151' }, size: 10 };
+            r.getCell(2).font = { bold: true, size: 12, color: { argb: AZUL } };
+            r.getCell(2).alignment = { horizontal: 'center' };
+            r.getCell(3).font = { size: 9, color: { argb: '6b7280' }, italic: true };
+            r.height = 22;
+        };
+
+        ws1.addRow(['RELATÓRIO DE ANÁLISE HISTÓRICA — ENTREGA DE TABLETS']).font = { bold: true, size: 13, color: { argb: AZUL } };
+        ws1.addRow([`Período: ${s.data_inicio ? new Date(s.data_inicio).toLocaleDateString('pt-BR') : '-'} a ${s.data_fim ? new Date(s.data_fim).toLocaleDateString('pt-BR') : '-'}  |  Emitido em: ${new Date().toLocaleDateString('pt-BR')}`]).font = { italic: true, size: 9, color: { argb: '6b7280' } };
+        ws1.addRow([]);
+        ws1.addRow(['INDICADOR', 'VALOR', 'OBSERVAÇÃO']).font = { bold: true, size: 10 };
+        ws1.addRow([]);
+
+        const duracao = s.data_inicio && s.data_fim
+            ? Math.round((new Date(s.data_fim) - new Date(s.data_inicio)) / 86400000) + 1 : 0;
+
+        addKpi(ws1, 'Total de Alunos Elegíveis', parseInt(s.total_elegiveis).toLocaleString('pt-BR'), 'Base importada');
+        addKpi(ws1, 'Total Entregues (confirmados)', parseInt(s.total_entregues).toLocaleString('pt-BR'), `Taxa: ${taxaGlobal}%`);
+        addKpi(ws1, 'Devolvidos', parseInt(s.total_devolvidos).toLocaleString('pt-BR'), 'Retornados ao almoxarifado');
+        addKpi(ws1, 'Em Lote (planejados, não confirmados)', parseInt(s.total_planejados).toLocaleString('pt-BR'), 'Aguardam confirmação');
+        addKpi(ws1, 'Pendentes (nunca alocados)', (totalElegiveis - totalEntregues - parseInt(s.total_devolvidos) - parseInt(s.total_planejados)).toLocaleString('pt-BR'), 'Sem registro de lote');
+        ws1.addRow([]);
+        addKpi(ws1, 'Elegíveis PCD (necessitam Livox)', parseInt(s.pcd_elegiveis).toLocaleString('pt-BR'), 'Base PCD');
+        addKpi(ws1, 'PCD Entregues', parseInt(s.pcd_entregues).toLocaleString('pt-BR'), `Taxa PCD: ${((parseInt(s.pcd_entregues)/parseInt(s.pcd_elegiveis))*100).toFixed(1)}%`);
+        ws1.addRow([]);
+        addKpi(ws1, 'Total de Lotes Criados', parseInt(s.total_lotes).toLocaleString('pt-BR'));
+        addKpi(ws1, 'Lotes com Atraso na Entrega', parseInt(s.lotes_atrasados).toLocaleString('pt-BR'), `${((parseInt(s.lotes_atrasados)/parseInt(s.total_lotes))*100).toFixed(0)}% dos lotes`);
+        addKpi(ws1, 'Lead Time Médio (criação → confirmação)', `${s.lead_time_medio || '-'} dias`, 'Média dos lotes confirmados');
+        addKpi(ws1, 'Termos de Responsabilidade Pendentes', parseInt(s.termos_pendentes).toLocaleString('pt-BR'), 'Aguardam assinatura');
+        ws1.addRow([]);
+        addKpi(ws1, 'Escolas com ao menos 1 entrega', `${s.escolas_atendidas} / ${s.escolas_elegiveis}`, '');
+        addKpi(ws1, 'Duração do período de execução', `${duracao} dias`, `${new Date(s.data_inicio).toLocaleDateString('pt-BR')} a ${new Date(s.data_fim).toLocaleDateString('pt-BR')}`);
+        addKpi(ws1, 'Velocidade média de entrega', `${duracao > 0 ? Math.round(totalEntregues / duracao) : '-'} tablets/dia`, 'Média do período completo');
+
+        // ── ABA 2: POR ESCOLA ─────────────────────────────────────────
+        const ws2 = wb.addWorksheet('2. Por Escola');
+        applyHeader(ws2, [
+            { header: 'RPA', key: 'rpa', width: 8 },
+            { header: 'UNIDADE ESCOLAR', key: 'escola', width: 48 },
+            { header: 'ELEGÍVEIS', key: 'elegiveis', width: 14 },
+            { header: 'ENTREGUES', key: 'entregues', width: 14 },
+            { header: 'PLANEJADOS', key: 'planejados', width: 14 },
+            { header: 'DEVOLVIDOS', key: 'devolvidos', width: 14 },
+            { header: 'PENDENTES', key: 'pendentes', width: 14 },
+            { header: 'TAXA (%)', key: 'taxa_entrega', width: 12 },
+            { header: 'PCD ELEG.', key: 'pcd_elegiveis', width: 12 },
+            { header: 'PCD ENTR.', key: 'pcd_entregues', width: 12 },
+            { header: 'TAXA PCD (%)', key: 'taxa_pcd', width: 14 }
+        ]);
+        schoolsQ.rows.forEach((r, i) => {
+            const row = addRow(ws2, {
+                rpa: r.rpa, escola: r.escola,
+                elegiveis: parseInt(r.elegiveis),
+                entregues: parseInt(r.entregues),
+                planejados: parseInt(r.planejados),
+                devolvidos: parseInt(r.devolvidos),
+                pendentes: Math.max(0, parseInt(r.pendentes)),
+                taxa_entrega: parseFloat(r.taxa_entrega) || 0,
+                pcd_elegiveis: parseInt(r.pcd_elegiveis) || 0,
+                pcd_entregues: parseInt(r.pcd_entregues) || 0,
+                taxa_pcd: r.taxa_pcd !== null ? parseFloat(r.taxa_pcd) : null
+            }, i % 2 === 1);
+            const taxa = parseFloat(r.taxa_entrega) || 0;
+            const taxaCell = row.getCell('taxa_entrega');
+            taxaCell.font = { bold: true, color: { argb: taxa < 80 ? VERMELHO : taxa < 95 ? LARANJA : VERDE } };
+            taxaCell.numFmt = '0.0"%"';
+            if (row.getCell('taxa_pcd').value !== null) row.getCell('taxa_pcd').numFmt = '0.0"%"';
+        });
+        // Linha de totais
+        const totRow = ws2.addRow({
+            rpa: 'TOTAL', escola: '',
+            elegiveis: schoolsQ.rows.reduce((a, r) => a + parseInt(r.elegiveis), 0),
+            entregues: schoolsQ.rows.reduce((a, r) => a + parseInt(r.entregues), 0),
+            planejados: schoolsQ.rows.reduce((a, r) => a + parseInt(r.planejados), 0),
+            devolvidos: schoolsQ.rows.reduce((a, r) => a + parseInt(r.devolvidos), 0),
+            pendentes: schoolsQ.rows.reduce((a, r) => a + Math.max(0, parseInt(r.pendentes)), 0),
+            taxa_entrega: parseFloat(taxaGlobal),
+            pcd_elegiveis: schoolsQ.rows.reduce((a, r) => a + (parseInt(r.pcd_elegiveis) || 0), 0),
+            pcd_entregues: schoolsQ.rows.reduce((a, r) => a + (parseInt(r.pcd_entregues) || 0), 0),
+            taxa_pcd: null
+        });
+        totRow.font = { bold: true, color: { argb: BRANCO } };
+        totRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AZUL } };
+        totRow.getCell('taxa_entrega').numFmt = '0.0"%"';
+
+        // ── ABA 3: POR RPA ────────────────────────────────────────────
+        const ws3 = wb.addWorksheet('3. Por RPA');
+        applyHeader(ws3, [
+            { header: 'RPA', key: 'rpa', width: 10 },
+            { header: 'ELEGÍVEIS', key: 'elegiveis', width: 14 },
+            { header: 'ENTREGUES', key: 'entregues', width: 14 },
+            { header: 'PENDENTES', key: 'pendentes', width: 14 },
+            { header: 'TAXA ENTREGA (%)', key: 'taxa', width: 18 },
+            { header: 'PCD ELEGÍVEIS', key: 'pcd_el', width: 16 },
+            { header: 'PCD ENTREGUES', key: 'pcd_en', width: 16 },
+            { header: 'TAXA PCD (%)', key: 'taxa_pcd', width: 16 }
+        ]);
+        rpaQ.rows.forEach((r, i) => {
+            const el = parseInt(r.elegiveis), en = parseInt(r.entregues);
+            const pe = parseInt(r.pcd_elegiveis), pc = parseInt(r.pcd_entregues);
+            const taxa = el > 0 ? parseFloat(((en/el)*100).toFixed(1)) : 0;
+            const taxap = pe > 0 ? parseFloat(((pc/pe)*100).toFixed(1)) : null;
+            const row = addRow(ws3, { rpa: r.rpa, elegiveis: el, entregues: en, pendentes: el - en, taxa, pcd_el: pe, pcd_en: pc, taxa_pcd: taxap }, i % 2 === 1);
+            const tc = row.getCell('taxa');
+            tc.font = { bold: true, color: { argb: taxa < 95 ? VERMELHO : VERDE } };
+            tc.numFmt = '0.0"%"';
+            if (taxap !== null) row.getCell('taxa_pcd').numFmt = '0.0"%"';
+        });
+
+        // ── ABA 4: TIMELINE SEMANAL ───────────────────────────────────
+        const ws4 = wb.addWorksheet('4. Timeline Semanal');
+        applyHeader(ws4, [
+            { header: 'SEMANA (INÍCIO)', key: 'semana', width: 18 },
+            { header: 'ENTREGAS NA SEMANA', key: 'entregas', width: 22 },
+            { header: 'ACUMULADO', key: 'acumulado', width: 16 },
+            { header: 'PROGRESSO (%)', key: 'progresso', width: 16 }
+        ]);
+        let acum = 0;
+        const maxSemana = Math.max(...timelineQ.rows.map(r => parseInt(r.entregas)));
+        timelineQ.rows.forEach((r, i) => {
+            acum += parseInt(r.entregas);
+            const prog = parseFloat(((acum / totalEntregues) * 100).toFixed(1));
+            const isPico = parseInt(r.entregas) === maxSemana;
+            const row = addRow(ws4, { semana: r.semana, entregas: parseInt(r.entregas), acumulado: acum, progresso: prog }, i % 2 === 1);
+            if (isPico) {
+                row.font = { bold: true, color: { argb: AZUL } };
+                row.getCell('entregas').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'dbeafe' } };
+            }
+            row.getCell('progresso').numFmt = '0.0"%"';
+        });
+
+        // ── ABA 5: ANÁLISE PCD ────────────────────────────────────────
+        const ws5 = wb.addWorksheet('5. Análise PCD');
+        applyHeader(ws5, [
+            { header: 'TIPO DE NECESSIDADE / PCD', key: 'tipo', width: 42 },
+            { header: 'QUANTIDADE DE ALUNOS', key: 'qtd', width: 24 },
+            { header: 'PARTICIPAÇÃO (%)', key: 'pct', width: 20 }
+        ]);
+        const totalPcdTypes = pcdTypesQ.rows.reduce((a, r) => a + parseInt(r.qtd), 0);
+        pcdTypesQ.rows.forEach((r, i) => {
+            const pct = parseFloat(((parseInt(r.qtd) / totalPcdTypes) * 100).toFixed(1));
+            const row = addRow(ws5, { tipo: r.tipo, qtd: parseInt(r.qtd), pct }, i % 2 === 1);
+            row.getCell('pct').numFmt = '0.0"%"';
+        });
+        ws5.addRow([]);
+        ws5.addRow(['TOTAL PCD', totalPcdTypes, 100]).font = { bold: true };
+
+        // ── ABA 6: ALERTAS (ESCOLAS SEM ENTREGA) ─────────────────────
+        const ws6 = wb.addWorksheet('6. Alertas — Sem Entrega');
+        applyHeader(ws6, [
+            { header: 'RPA', key: 'rpa', width: 8 },
+            { header: 'UNIDADE ESCOLAR', key: 'escola', width: 48 },
+            { header: 'ALUNOS PENDENTES', key: 'alunos', width: 20 }
+        ]);
+        semEntregaQ.rows.forEach((r, i) => {
+            const row = addRow(ws6, { rpa: r.rpa, escola: r.escola, alunos: parseInt(r.alunos_pendentes) }, i % 2 === 1);
+            row.getCell('alunos').font = { bold: true, color: { argb: VERMELHO } };
+        });
+        if (semEntregaQ.rows.length === 0) ws6.addRow({ rpa: '-', escola: 'Nenhuma escola sem entrega identificada', alunos: 0 });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=Relatorio_Historico_Tablets.xlsx');
+        await wb.xlsx.write(res);
+        res.end();
+
+    } catch (error) {
+        console.error('Erro ao gerar relatório histórico XLSX:', error);
+        res.status(500).json({ message: 'Erro ao gerar o relatório histórico.' });
+    }
+});
+
 // ======================================
 // NOVAS ROTAS DE RELATÓRIOS - SETORES E TIPOS DE ITENS
 // ======================================
