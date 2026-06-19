@@ -3315,7 +3315,7 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
   };
 
   // Efeitos de filtro para autocomplete
-  useEffect(() => { if (solicitanteSearchTerm.length > 2) { setFilteredPeople(people.filter(p => p.full_name.toLowerCase().includes(solicitanteSearchTerm.toLowerCase()) || p.cpf.includes(solicitanteSearchTerm) || (p.registration_number && p.registration_number.includes(solicitanteSearchTerm)))); } else { setFilteredPeople([]); } }, [solicitanteSearchTerm, people]);
+  useEffect(() => { if (solicitanteSearchTerm.length > 2) { setFilteredPeople(people.filter(p => p.full_name.toLowerCase().includes(solicitanteSearchTerm.toLowerCase()) || (p.cpf && p.cpf.includes(solicitanteSearchTerm)) || (p.registration_number && p.registration_number.includes(solicitanteSearchTerm)))); } else { setFilteredPeople([]); } }, [solicitanteSearchTerm, people]);
   useEffect(() => { if (unitSearchTerm.length > 2) { setFilteredUnits(units.filter(unit => unit.name.toLowerCase().includes(unitSearchTerm.toLowerCase()) || (unit.code && unit.code.toLowerCase().includes(unitSearchTerm.toLowerCase())) || unit.type.toLowerCase().includes(unitSearchTerm.toLowerCase()))); } else { setFilteredUnits([]); } }, [unitSearchTerm, units]);
 
   return (
