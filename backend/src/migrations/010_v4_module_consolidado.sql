@@ -1,38 +1,14 @@
 -- =============================================================================
 -- Migration consolidada: Módulo de Solicitações de TI v4
--- Substitui: 010_laudo_resultado_new_statuses.sql
---            011_requests_module.sql
---            012_fix_v4_tables.sql
---            013_catalog_and_request_items.sql
---
--- Pode ser executada em banco limpo (sem migrações anteriores do módulo).
--- Todos os comandos usam IF NOT EXISTS / IF EXISTS para ser idempotente.
+-- Premissa: banco com schema original da aplicação (people, units, users,
+--           asset_movements, item_types já existem). Sem dependência das
+--           migrations 001-009.
+-- Todos os comandos usam IF NOT EXISTS para ser idempotente.
 -- =============================================================================
 
 BEGIN;
 
--- ─── 1. equipment_requests (v3) — novos campos e status ──────────────────────
---   Mantém o módulo v3 funcional com o resultado de laudo e os estados
---   adicionados durante o desenvolvimento.
-
-ALTER TABLE equipment_requests
-  ADD COLUMN IF NOT EXISTS laudo_resultado VARCHAR(20)
-    CHECK (laudo_resultado IN ('conserto', 'substituicao'));
-
-ALTER TABLE equipment_requests
-  DROP CONSTRAINT IF EXISTS equipment_requests_status_check;
-
-ALTER TABLE equipment_requests
-  ADD CONSTRAINT equipment_requests_status_check
-    CHECK (status IN (
-      'aberta', 'em_analise', 'aprovada', 'em_execucao', 'finalizada',
-      'rejeitada', 'cancelada', 'em_manutencao', 'aguardando_laudo',
-      'resolvida_in_loco', 'devolvido', 'em_vistoria', 'vistoria_concluida',
-      'nao_constatada', 'em_conserto', 'aprovada_conserto'
-    ));
-
-
--- ─── 2. requests — tabela principal do módulo v4 ─────────────────────────────
+-- ─── 1. requests — tabela principal do módulo v4 ─────────────────────────────
 
 CREATE TABLE IF NOT EXISTS requests (
   id                    SERIAL PRIMARY KEY,
@@ -75,8 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_requests_unit    ON requests(unit_id);
 CREATE INDEX IF NOT EXISTS idx_requests_created ON requests(created_at DESC);
 
 
--- ─── 3. technical_visits ─────────────────────────────────────────────────────
---   FK aponta para requests(id), NÃO para equipment_requests(id).
+-- ─── 2. technical_visits ─────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS technical_visits (
   id             SERIAL PRIMARY KEY,
@@ -94,8 +69,7 @@ CREATE TABLE IF NOT EXISTS technical_visits (
 CREATE INDEX IF NOT EXISTS idx_technical_visits_request ON technical_visits(request_id);
 
 
--- ─── 4. request_status_history ───────────────────────────────────────────────
---   FK aponta para requests(id), NÃO para equipment_requests(id).
+-- ─── 3. request_status_history ───────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS request_status_history (
   id          SERIAL PRIMARY KEY,
@@ -110,8 +84,8 @@ CREATE TABLE IF NOT EXISTS request_status_history (
 CREATE INDEX IF NOT EXISTS idx_request_status_history_request ON request_status_history(request_id);
 
 
--- ─── 5. Acoplamento com movimentações ────────────────────────────────────────
---   FK nullable: zero impacto em movimentações existentes sem solicitação.
+-- ─── 4. Acoplamento com movimentações ────────────────────────────────────────
+-- FK nullable: zero impacto em movimentações existentes sem solicitação.
 
 ALTER TABLE asset_movements
   ADD COLUMN IF NOT EXISTS request_id INTEGER REFERENCES requests(id);
@@ -120,7 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_movements_request
   ON asset_movements(request_id) WHERE request_id IS NOT NULL;
 
 
--- ─── 6. Catálogo de marcas e modelos ─────────────────────────────────────────
+-- ─── 5. Catálogo de marcas e modelos ─────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS catalog_brands (
   id   SERIAL PRIMARY KEY,
@@ -139,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_catalog_models_brand     ON catalog_models(brand_
 CREATE INDEX IF NOT EXISTS idx_catalog_models_item_type ON catalog_models(item_type_id);
 
 
--- ─── 7. Itens da solicitação (catálogo + quantidade) ─────────────────────────
+-- ─── 6. Itens da solicitação (catálogo + quantidade) ─────────────────────────
 
 CREATE TABLE IF NOT EXISTS request_catalog_items (
   id           SERIAL PRIMARY KEY,
