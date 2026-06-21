@@ -8229,6 +8229,24 @@ app.post('/api/asset-movements', authenticateToken, authorizePermission('ACTION_
         return res.status(400).json({ message: 'Dados obrigatórios faltando.' });
     }
 
+    // Valida solicitação vinculada antes de iniciar a transação
+    if (request_id) {
+        const reqCheck = await pool.query(
+            'SELECT id, status FROM requests WHERE id = $1',
+            [parseInt(request_id)]
+        );
+        if (reqCheck.rows.length === 0) {
+            if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            return res.status(400).json({ message: 'Solicitação de TI não encontrada.' });
+        }
+        if (reqCheck.rows[0].status !== 'aprovado') {
+            if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            return res.status(400).json({
+                message: `A solicitação de TI precisa estar em status "Aprovada" para vincular uma movimentação (status atual: ${reqCheck.rows[0].status}).`
+            });
+        }
+    }
+
     let receiptPath = req.file ? req.file.path : null;
     let deliveryStatus = 'pending_confirmation';
     let actualDeliveryDate = null;

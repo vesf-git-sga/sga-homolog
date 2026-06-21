@@ -211,6 +211,13 @@ async function scheduleTechnicalVisit(pool, requestId, data, currentUserId) {
     throw new Error('Agendamento disponível apenas após ativação do botão "Solicitar Visita Técnica".')
   }
 
+  const existing = await pool.query(
+    'SELECT id FROM technical_visits WHERE request_id = $1 LIMIT 1', [requestId]
+  )
+  if (existing.rowCount > 0) {
+    throw new Error('Já existe uma visita técnica registrada para esta solicitação.')
+  }
+
   return repository.createTechnicalVisit(pool, {
     request_id:     requestId,
     assigned_to:    data.assigned_to || null,
@@ -252,6 +259,17 @@ async function updateVisitResult(pool, visitId, result, findings, currentUserId)
   )
   if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
   if (!visitRes.rows[0].completed_at) throw new Error('A visita ainda não foi concluída.')
+
+  // Bloqueia edição após aprovação: o parecer da visita é congelado a partir deste ponto
+  const reqRes = await pool.query(
+    'SELECT status FROM requests WHERE id = $1', [visitRes.rows[0].request_id]
+  )
+  if (reqRes.rows.length > 0) {
+    const LOCKED = ['aprovado', 'em_execucao', 'concluido']
+    if (LOCKED.includes(reqRes.rows[0].status)) {
+      throw new Error('O parecer da visita não pode ser alterado após a solicitação ser aprovada.')
+    }
+  }
 
   return repository.updateTechnicalVisitResult(pool, visitId, result, findings)
 }

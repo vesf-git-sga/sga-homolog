@@ -172,23 +172,31 @@ async function updateRequestStatus(pool, requestId, movementStatus, userId, note
   const newRequestStatus = statusMap[movementStatus]
   if (!newRequestStatus) return null
 
-  // Busca status atual sem travar (leitura rápida)
-  const cur = await pool.query('SELECT status FROM requests WHERE id = $1', [requestId])
-  if (cur.rows.length === 0) return null
-
-  const currentStatus = cur.rows[0].status
-
-  // Evita regressões desnecessárias (ex: não reverter concluido → em_execucao)
   const ORDER = ['requisitado', 'visita_tecnica_solicitada', 'visita_realizada',
     'aguardando_aprovacao', 'aprovado', 'em_execucao', 'concluido']
-  const currentIdx = ORDER.indexOf(currentStatus)
   const newIdx = ORDER.indexOf(newRequestStatus)
 
-  // Permite: avançar sempre, ou retroceder para 'aprovado' (movement cancelada)
-  if (newRequestStatus !== 'aprovado' && newIdx <= currentIdx) return null
-  if (newRequestStatus === 'aprovado' && currentStatus !== 'em_execucao') return null
-
-  return transitionStatus(pool, requestId, newRequestStatus, userId, notes || `Atualizado automaticamente via movimentação.`, null, null)
+  // Validação de progressão dentro da transação (com FOR UPDATE), eliminando a race condition
+  // entre leitura livre e o SELECT FOR UPDATE do transitionStatus.
+  try {
+    return await transitionStatus(
+      pool, requestId, newRequestStatus, userId,
+      notes || 'Atualizado automaticamente via movimentação.',
+      async (_client, lockedRequest) => {
+        const currentIdx = ORDER.indexOf(lockedRequest.status)
+        if (newRequestStatus !== 'aprovado' && newIdx <= currentIdx) {
+          throw new Error('__SKIP__')
+        }
+        if (newRequestStatus === 'aprovado' && lockedRequest.status !== 'em_execucao') {
+          throw new Error('__SKIP__')
+        }
+      },
+      null
+    )
+  } catch (err) {
+    if (err.message === '__SKIP__') return null
+    throw err
+  }
 }
 
 // ─── Visitas técnicas ─────────────────────────────────────────────────────────
