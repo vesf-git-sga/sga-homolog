@@ -387,6 +387,28 @@ async function findRequestForMovementPrefill(pool, protocol) {
   return r.rows[0] || null
 }
 
+async function findRequestsForVisitRoute(pool) {
+  const r = await pool.query(
+    `SELECT r.id, r.protocol, r.type,
+            u.name    AS unit_name,
+            u.rpa     AS unit_rpa,
+            u.address AS unit_address,
+            p.full_name AS requester_name,
+            tv.id            AS visit_id,
+            tv.scheduled_date,
+            tv.scheduled_time,
+            ua.full_name     AS assigned_to_name
+     FROM requests r
+     JOIN units   u  ON u.id = r.unit_id
+     JOIN people  p  ON p.id = r.requester_person_id
+     LEFT JOIN technical_visits tv ON tv.request_id = r.id
+     LEFT JOIN users            ua ON ua.id = tv.assigned_to
+     WHERE r.status = 'visita_tecnica_solicitada'
+     ORDER BY u.rpa NULLS LAST, tv.scheduled_date NULLS FIRST`
+  )
+  return r.rows
+}
+
 module.exports = {
   create,
   findById,
@@ -407,4 +429,5 @@ module.exports = {
   findUnitById,
   findApprovedRequestById,
   findRequestForMovementPrefill,
+  findRequestsForVisitRoute,
 }

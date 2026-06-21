@@ -13,6 +13,7 @@ import {
   CatalogBrand,
   CatalogModel,
   ItemType,
+  VisitRouteEntry,
 } from '../types/requests'
 
 let API_URL = process.env.REACT_APP_API_URL || `http://${window.location.hostname}:5000/api`
@@ -130,6 +131,9 @@ export const requestsApi = {
   // Pré-preenchimento rico por protocolo (novo — retorna solicitante, unidade, canal e itens)
   getMovementPrefill: (protocol: string) =>
     axios.get<MovementPrefill>(`${API_URL}/requests/movement-prefill`, { params: { protocol } }).then(r => r.data),
+
+  getVisitRoute: () =>
+    axios.get<VisitRouteEntry[]>(`${API_URL}/requests/visit-route`).then(r => r.data),
 
   // ─── Catálogo ───────────────────────────────────────────────────────────
   listItemTypes: () =>

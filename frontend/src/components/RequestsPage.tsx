@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { PlusCircle, RefreshCw, Search, Inbox, FileText, ChevronRight } from 'lucide-react'
+import { PlusCircle, RefreshCw, Search, Inbox, FileText, MapPin } from 'lucide-react'
 import { useToast } from '../App'
 import StatusBadge from './StatusBadge'
 import RequestModal from './RequestModal'
 import RequestDetail from './RequestDetail'
+import VisitRoutePanel from './VisitRoutePanel'
 import { EquipmentRequest } from '../types/requests'
 import { REQUEST_TYPE_LABELS, REQUEST_STATUS_LABELS, REQUEST_CHANNEL_LABELS } from '../utils/translations'
 import { requestsApi } from '../services/requestsApi'
@@ -50,6 +51,8 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
   const [filterRpa, setFilterRpa] = useState('')
   const [activeKpi, setActiveKpi] = useState<string | null>(null)
 
+  const [showRoutePanel, setShowRoutePanel] = useState(false)
+  const [routeRefresh, setRouteRefresh] = useState(0)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null)
 
@@ -71,10 +74,11 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
   useEffect(() => { fetchRequests() }, [])
 
   // ─── KPIs ──────────────────────────────────────────────────────────────────
-  const kpiAtivas    = useMemo(() => requests.filter(r => ACTIVE_STATUSES.includes(r.status)).length, [requests])
+  const kpiAtivas     = useMemo(() => requests.filter(r => ACTIVE_STATUSES.includes(r.status)).length, [requests])
   const kpiAguardando = useMemo(() => requests.filter(r => r.status === 'aguardando_aprovacao').length, [requests])
-  const kpiAprovadas = useMemo(() => requests.filter(r => r.status === 'aprovado').length, [requests])
+  const kpiAprovadas  = useMemo(() => requests.filter(r => r.status === 'aprovado').length, [requests])
   const kpiConcluidas = useMemo(() => requests.filter(r => r.status === 'concluido').length, [requests])
+  const kpiVisitas    = useMemo(() => requests.filter(r => r.status === 'visita_tecnica_solicitada').length, [requests])
 
   // ─── Filtros ───────────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -111,6 +115,7 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
   const handleDetailClose = () => {
     setSelectedRequestId(null)
     fetchRequests()
+    if (showRoutePanel) setRouteRefresh(k => k + 1)
   }
 
   const canCreate = ['basic', 'operator', 'manager', 'admin'].includes(currentUserRole)
@@ -140,7 +145,7 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <KpiCard label="Ativas" count={kpiAtivas} icon={<Inbox size={22} className="text-blue-600" />}
           iconBg="bg-blue-50" countColor="text-blue-700" onClick={() => handleKpiClick('ativas')} active={activeKpi === 'ativas'} />
         <KpiCard label="Aguard. Aprovação" count={kpiAguardando} icon={<FileText size={22} className="text-yellow-600" />}
@@ -149,7 +154,19 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
           iconBg="bg-green-50" countColor="text-green-700" onClick={() => handleKpiClick('aprovadas')} active={activeKpi === 'aprovadas'} />
         <KpiCard label="Concluídas" count={kpiConcluidas} icon={<FileText size={22} className="text-teal-600" />}
           iconBg="bg-teal-50" countColor="text-teal-700" onClick={() => handleKpiClick('concluidas')} active={activeKpi === 'concluidas'} />
+        <KpiCard label="Visitas Técnicas" count={kpiVisitas} icon={<MapPin size={22} className="text-purple-600" />}
+          iconBg="bg-purple-50" countColor="text-purple-700"
+          onClick={() => setShowRoutePanel(prev => !prev)} active={showRoutePanel} />
       </div>
+
+      {/* Painel de rotas de visitas */}
+      {showRoutePanel && (
+        <VisitRoutePanel
+          onOpenDetail={id => setSelectedRequestId(id)}
+          onClose={() => setShowRoutePanel(false)}
+          refreshKey={routeRefresh}
+        />
+      )}
 
       {/* Filtros */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">

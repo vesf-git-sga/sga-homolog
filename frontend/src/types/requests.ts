@@ -98,3 +98,17 @@ export interface LinkedMovement {
   asset_count: number
   created_at: string
 }
+
+export interface VisitRouteEntry {
+  id: number
+  protocol: string
+  type: RequestType
+  unit_name: string
+  unit_rpa?: string | null
+  unit_address?: string | null
+  requester_name: string
+  visit_id?: number | null
+  scheduled_date?: string | null
+  scheduled_time?: string | null
+  assigned_to_name?: string | null
+}

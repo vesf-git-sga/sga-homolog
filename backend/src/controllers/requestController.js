@@ -184,6 +184,15 @@ async function getMovementPrefill(req, res, pool) {
   }
 }
 
+async function getVisitRoute(req, res, pool) {
+  try {
+    const entries = await repository.findRequestsForVisitRoute(pool)
+    res.status(200).json(entries)
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao buscar rotas de visitas.' })
+  }
+}
+
 module.exports = {
   create,
   list,
@@ -197,4 +206,5 @@ module.exports = {
   listTechnicalVisits,
   getApprovedPrefill,
   getMovementPrefill,
+  getVisitRoute,
 }

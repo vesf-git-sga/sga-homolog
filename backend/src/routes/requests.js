@@ -52,6 +52,9 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
     (req, res) => controller.list(req, res, pool))
 
   // Deve ficar antes de /requests/:id para não ser capturada como id numérico
+  router.get('/requests/visit-route', authenticateToken,
+    (req, res) => controller.getVisitRoute(req, res, pool))
+
   router.get('/requests/movement-prefill', authenticateToken,
     authorizePermission('ACTION_REGISTER_MOVEMENT'),
     (req, res) => controller.getMovementPrefill(req, res, pool))
