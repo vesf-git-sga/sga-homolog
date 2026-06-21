@@ -632,6 +632,18 @@ app.get('/api/users', authenticateToken, authorizeRole(['admin']), async (req, r
   }
 });
 
+// Lista mínima de usuários para seleção de técnico (qualquer usuário autenticado)
+app.get('/api/users/for-assignment', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, full_name FROM users WHERE is_active = true ORDER BY full_name ASC'
+    )
+    res.status(200).json(result.rows)
+  } catch (err) {
+    res.status(500).json({ message: 'Erro interno.' })
+  }
+})
+
 // ======================================
 // NOVAS ROTAS DE RELATÓRIOS - PESSOAS
 // ======================================

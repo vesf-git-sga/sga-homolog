@@ -99,7 +99,7 @@ export const requestsApi = {
     axios.patch<TechnicalVisit>(`${API_URL}/requests/${requestId}/technical-visits/${visitId}/result`, payload).then(r => r.data),
 
   listUsers: () =>
-    axios.get<{ id: number; full_name: string; username: string }[]>(`${API_URL}/users`).then(r => r.data),
+    axios.get<{ id: number; full_name: string }[]>(`${API_URL}/users/for-assignment`).then(r => r.data),
 
   // Pré-preenchimento no form de movimentação
   getApprovedPrefill: (id: number) =>
