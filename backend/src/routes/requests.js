@@ -60,6 +60,12 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
   router.patch('/requests/:id/technical-visits/:visitId/complete', authenticateToken,
     (req, res) => controller.completeTechnicalVisit(req, res, pool, logAudit))
 
+  router.patch('/requests/:id/technical-visits/:visitId/schedule', authenticateToken,
+    (req, res) => controller.updateVisitSchedule(req, res, pool, logAudit))
+
+  router.patch('/requests/:id/technical-visits/:visitId/result', authenticateToken,
+    (req, res) => controller.updateVisitResult(req, res, pool, logAudit))
+
   // ─── Download do ofício ──────────────────────────────────────────────────
   router.get('/requests/:id/oficio', authenticateToken, async (req, res) => {
     try {

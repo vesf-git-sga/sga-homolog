@@ -37,9 +37,21 @@ export interface RequestItemPayload {
 export interface ScheduleVisitPayload {
   assigned_to?: number
   scheduled_date?: string
+  scheduled_time?: string
+}
+
+export interface UpdateVisitSchedulePayload {
+  assigned_to?: number
+  scheduled_date?: string
+  scheduled_time?: string
 }
 
 export interface CompleteVisitPayload {
+  result: 'constatada' | 'nao_constatada'
+  findings?: string
+}
+
+export interface UpdateVisitResultPayload {
   result: 'constatada' | 'nao_constatada'
   findings?: string
 }
@@ -79,6 +91,15 @@ export const requestsApi = {
 
   completeVisit: (requestId: number, visitId: number, payload: CompleteVisitPayload) =>
     axios.patch(`${API_URL}/requests/${requestId}/technical-visits/${visitId}/complete`, payload).then(r => r.data),
+
+  updateVisitSchedule: (requestId: number, visitId: number, payload: UpdateVisitSchedulePayload) =>
+    axios.patch<TechnicalVisit>(`${API_URL}/requests/${requestId}/technical-visits/${visitId}/schedule`, payload).then(r => r.data),
+
+  updateVisitResult: (requestId: number, visitId: number, payload: UpdateVisitResultPayload) =>
+    axios.patch<TechnicalVisit>(`${API_URL}/requests/${requestId}/technical-visits/${visitId}/result`, payload).then(r => r.data),
+
+  listUsers: () =>
+    axios.get<{ id: number; full_name: string; username: string }[]>(`${API_URL}/users`).then(r => r.data),
 
   // Pré-preenchimento no form de movimentação
   getApprovedPrefill: (id: number) =>

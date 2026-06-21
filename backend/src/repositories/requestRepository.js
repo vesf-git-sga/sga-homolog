@@ -196,12 +196,34 @@ async function updateRequestStatus(pool, requestId, movementStatus, userId, note
 async function createTechnicalVisit(pool, data) {
   const result = await pool.query(
     `INSERT INTO technical_visits
-      (request_id, assigned_to, scheduled_date, created_by)
-     VALUES ($1, $2, $3, $4)
+      (request_id, assigned_to, scheduled_date, scheduled_time, created_by)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [data.request_id, data.assigned_to || null, data.scheduled_date || null, data.created_by]
+    [data.request_id, data.assigned_to || null, data.scheduled_date || null, data.scheduled_time || null, data.created_by]
   )
   return result.rows[0]
+}
+
+async function updateTechnicalVisitSchedule(pool, visitId, data) {
+  const res = await pool.query(
+    `UPDATE technical_visits
+     SET assigned_to = $1, scheduled_date = $2, scheduled_time = $3
+     WHERE id = $4
+     RETURNING *`,
+    [data.assigned_to || null, data.scheduled_date || null, data.scheduled_time || null, visitId]
+  )
+  return res.rows[0] || null
+}
+
+async function updateTechnicalVisitResult(pool, visitId, result, findings) {
+  const res = await pool.query(
+    `UPDATE technical_visits
+     SET result = $1, findings = $2
+     WHERE id = $3
+     RETURNING *`,
+    [result, findings || null, visitId]
+  )
+  return res.rows[0] || null
 }
 
 async function completeTechnicalVisit(pool, visitId, result, findings, completedBy) {
@@ -331,6 +353,8 @@ module.exports = {
   transitionStatus,
   updateRequestStatus,
   createTechnicalVisit,
+  updateTechnicalVisitSchedule,
+  updateTechnicalVisitResult,
   completeTechnicalVisit,
   findTechnicalVisitsByRequestId,
   findStatusHistory,

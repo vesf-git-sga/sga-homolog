@@ -19,13 +19,13 @@ const CHANNELS_BY_TYPE = {
 // Fluxo unificado para todos os tipos:
 //
 //   requisitado
-//     → visita_tecnica_solicitada  (opcional, não vinculante)
+//     → visita_tecnica_solicitada  (botão "Solicitar Visita Técnica")
 //     → aguardando_aprovacao       (pular visita diretamente)
 //
 //   visita_tecnica_solicitada
-//     → visita_realizada
+//     → aguardando_aprovacao  (automático ao registrar resultado da visita)
 //
-//   visita_realizada
+//   visita_realizada  (status legado — mantido para registros antigos)
 //     → aguardando_aprovacao
 //
 //   aguardando_aprovacao
@@ -49,10 +49,11 @@ const TRANSITIONS = {
     cancelado:                 ['manager', 'admin'],
   },
   visita_tecnica_solicitada: {
-    visita_realizada: ['basic', 'operator', 'manager', 'admin'],
-    cancelado:        ['manager', 'admin'],
+    // Sem transição manual: completeTechnicalVisit avança direto para aguardando_aprovacao.
+    cancelado: ['manager', 'admin'],
   },
   visita_realizada: {
+    // Status legado: registros antigos podem avançar manualmente.
     aguardando_aprovacao: ['manager', 'admin'],
     cancelado:            ['manager', 'admin'],
   },
@@ -208,42 +209,53 @@ async function scheduleTechnicalVisit(pool, requestId, data, currentUserId) {
   const request = await repository.findById(pool, requestId)
   if (!request) throw new Error('Solicitação não encontrada.')
 
-  if (!['requisitado', 'visita_tecnica_solicitada'].includes(request.status)) {
-    throw new Error('Visita técnica disponível apenas para solicitações no início do fluxo.')
+  if (request.status !== 'visita_tecnica_solicitada') {
+    throw new Error('Agendamento disponível apenas após ativação do botão "Solicitar Visita Técnica".')
   }
 
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
+  return repository.createTechnicalVisit(pool, {
+    request_id:     requestId,
+    assigned_to:    data.assigned_to || null,
+    scheduled_date: data.scheduled_date || null,
+    scheduled_time: data.scheduled_time || null,
+    created_by:     currentUserId,
+  })
+}
 
-    const visit = await repository.createTechnicalVisit(pool, {
-      request_id:    requestId,
-      assigned_to:   data.assigned_to || null,
-      scheduled_date: data.scheduled_date || null,
-      created_by:    currentUserId,
-    })
+async function updateVisitSchedule(pool, visitId, data, currentUserId) {
+  const visitRes = await pool.query(
+    'SELECT * FROM technical_visits WHERE id = $1', [visitId]
+  )
+  if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
+  const visit = visitRes.rows[0]
 
-    // Avança o status se ainda em 'requisitado'
-    if (request.status === 'requisitado') {
-      await client.query(
-        `UPDATE requests SET status = 'visita_tecnica_solicitada', updated_at = NOW() WHERE id = $1`,
-        [requestId]
-      )
-      await client.query(
-        `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
-         VALUES ($1, 'requisitado', 'visita_tecnica_solicitada', 'Visita técnica agendada.', $2)`,
-        [requestId, currentUserId]
-      )
-    }
-
-    await client.query('COMMIT')
-    return visit
-  } catch (err) {
-    await client.query('ROLLBACK')
-    throw err
-  } finally {
-    client.release()
+  const reqRes = await pool.query(
+    'SELECT status FROM requests WHERE id = $1', [visit.request_id]
+  )
+  if (!reqRes.rows.length) throw new Error('Solicitação não encontrada.')
+  if (reqRes.rows[0].status !== 'visita_tecnica_solicitada') {
+    throw new Error('Edição de agendamento disponível apenas enquanto a visita está pendente.')
   }
+
+  return repository.updateTechnicalVisitSchedule(pool, visitId, {
+    assigned_to:    data.assigned_to || null,
+    scheduled_date: data.scheduled_date || null,
+    scheduled_time: data.scheduled_time || null,
+  })
+}
+
+async function updateVisitResult(pool, visitId, result, findings, currentUserId) {
+  if (!result || !['constatada', 'nao_constatada'].includes(result)) {
+    throw new Error('Resultado inválido: use "constatada" ou "nao_constatada".')
+  }
+
+  const visitRes = await pool.query(
+    'SELECT * FROM technical_visits WHERE id = $1', [visitId]
+  )
+  if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
+  if (!visitRes.rows[0].completed_at) throw new Error('A visita ainda não foi concluída.')
+
+  return repository.updateTechnicalVisitResult(pool, visitId, result, findings)
 }
 
 async function completeTechnicalVisit(pool, visitId, result, findings, currentUserId) {
@@ -270,14 +282,14 @@ async function completeTechnicalVisit(pool, visitId, result, findings, currentUs
       [result, findings || null, currentUserId, visitId]
     )
 
-    // Avança o status da solicitação para visita_realizada
+    // Avança direto para aguardando_aprovacao (skip visita_realizada)
     await client.query(
-      `UPDATE requests SET status = 'visita_realizada', updated_at = NOW() WHERE id = $1`,
+      `UPDATE requests SET status = 'aguardando_aprovacao', updated_at = NOW() WHERE id = $1`,
       [visit.request_id]
     )
     await client.query(
       `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
-       VALUES ($1, 'visita_tecnica_solicitada', 'visita_realizada', $2, $3)`,
+       VALUES ($1, 'visita_tecnica_solicitada', 'aguardando_aprovacao', $2, $3)`,
       [
         visit.request_id,
         `Visita concluída. Resultado: ${result === 'constatada' ? 'Defeito constatado' : 'Defeito não constatado'}.${findings ? ' Parecer: ' + findings : ''}`,
@@ -317,6 +329,8 @@ module.exports = {
   getRequestById,
   changeStatus,
   scheduleTechnicalVisit,
+  updateVisitSchedule,
+  updateVisitResult,
   completeTechnicalVisit,
   updateRequestFromMovement,
   findApprovedRequest,

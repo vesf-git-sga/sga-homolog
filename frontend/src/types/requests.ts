@@ -68,6 +68,7 @@ export interface TechnicalVisit {
   assigned_to?: number | null
   assigned_to_name?: string | null
   scheduled_date?: string | null
+  scheduled_time?: string | null
   result?: 'constatada' | 'nao_constatada' | null
   findings?: string | null
   completed_by?: number | null

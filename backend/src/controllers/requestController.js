@@ -118,6 +118,37 @@ async function completeTechnicalVisit(req, res, pool, logAudit) {
   }
 }
 
+async function updateVisitSchedule(req, res, pool, logAudit) {
+  try {
+    const visitId = parseInt(req.params.visitId)
+    const visit = await service.updateVisitSchedule(pool, visitId, req.body, req.user.id)
+    await logAudit(req.user.id, 'technical_visit_schedule_updated', 'technical_visits', visitId,
+      { request_id: parseInt(req.params.id) }, req.ip)
+    res.status(200).json(visit)
+  } catch (err) {
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('disponível') || err.message.includes('pendente') ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
+async function updateVisitResult(req, res, pool, logAudit) {
+  try {
+    const visitId = parseInt(req.params.visitId)
+    const { result, findings } = req.body
+    const visit = await service.updateVisitResult(pool, visitId, result, findings, req.user.id)
+    await logAudit(req.user.id, 'technical_visit_result_updated', 'technical_visits', visitId,
+      { request_id: parseInt(req.params.id), result }, req.ip)
+    res.status(200).json(visit)
+  } catch (err) {
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('inválido') || err.message.includes('concluída') ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
 async function listTechnicalVisits(req, res, pool) {
   try {
     const visits = await repository.findTechnicalVisitsByRequestId(pool, parseInt(req.params.id))
@@ -147,6 +178,8 @@ module.exports = {
   changeStatus,
   getStatusHistory,
   scheduleTechnicalVisit,
+  updateVisitSchedule,
+  updateVisitResult,
   completeTechnicalVisit,
   listTechnicalVisits,
   getApprovedPrefill,
