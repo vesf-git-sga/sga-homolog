@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { X, Calendar, CheckCircle, XCircle, Clock, Truck, ChevronRight, ArrowRight } from 'lucide-react'
-import { useToast } from '../App'
+import React, { useState, useEffect, useCallback, useContext } from 'react'
+import { X, Calendar, CheckCircle, XCircle, Clock, Truck, ChevronRight, ArrowRight, Download } from 'lucide-react'
+import { useToast, AuthContext } from '../App'
 import StatusBadge from './StatusBadge'
 import { requestsApi } from '../services/requestsApi'
 import { EquipmentRequest, TechnicalVisit, StatusHistoryEntry, LinkedMovement, RequestStatus } from '../types/requests'
@@ -81,6 +81,8 @@ const MovementCard = ({ m }: { m: LinkedMovement }) => {
 // ─── Componente principal ────────────────────────────────────────────────────
 const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailProps) => {
   const { addToast } = useToast()
+  const ctx = useContext(AuthContext) as any
+  const API_URL: string = ctx?.API_URL || ''
 
   const [request, setRequest] = useState<EquipmentRequest | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -167,6 +169,28 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
       addToast(err?.response?.data?.message || 'Erro ao concluir visita.', 'error')
     } finally {
       setIsActing(false)
+    }
+  }
+
+  const handleDownloadOficio = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const base = API_URL.replace(/\/api$/, '')
+      const resp = await fetch(`${base}/api/requests/${requestId}/oficio`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) throw new Error()
+      const blob = await resp.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = request?.oficio_original_name || 'oficio'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    } catch {
+      addToast('Erro ao baixar ofício.', 'error')
     }
   }
 
@@ -300,9 +324,18 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
 
                   {/* ── Ofício ── */}
                   {request.oficio_path && (
-                    <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm">
-                      <span className="text-amber-700 font-medium">Ofício:</span>
-                      <span className="text-gray-700 truncate">{request.oficio_original_name || 'Arquivo anexado'}</span>
+                    <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-amber-700 font-medium shrink-0">Ofício:</span>
+                        <span className="text-gray-700 truncate">{request.oficio_original_name || 'Arquivo anexado'}</span>
+                      </div>
+                      <button
+                        onClick={handleDownloadOficio}
+                        className="flex items-center gap-1 ml-3 px-2.5 py-1 text-xs font-medium text-amber-800 bg-amber-200 rounded-lg hover:bg-amber-300 transition-colors shrink-0"
+                      >
+                        <Download size={12} />
+                        Baixar
+                      </button>
                     </div>
                   )}
 

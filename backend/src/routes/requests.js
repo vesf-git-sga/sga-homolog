@@ -60,6 +60,24 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
   router.patch('/requests/:id/technical-visits/:visitId/complete', authenticateToken,
     (req, res) => controller.completeTechnicalVisit(req, res, pool, logAudit))
 
+  // ─── Download do ofício ──────────────────────────────────────────────────
+  router.get('/requests/:id/oficio', authenticateToken, async (req, res) => {
+    try {
+      const result = await pool.query(
+        'SELECT oficio_path, oficio_original_name FROM requests WHERE id = $1',
+        [req.params.id]
+      )
+      if (!result.rows.length || !result.rows[0].oficio_path)
+        return res.status(404).json({ message: 'Ofício não encontrado.' })
+      const { oficio_path, oficio_original_name } = result.rows[0]
+      if (!fs.existsSync(oficio_path))
+        return res.status(404).json({ message: 'Arquivo não encontrado no servidor.' })
+      res.download(oficio_path, oficio_original_name || path.basename(oficio_path))
+    } catch (err) {
+      res.status(500).json({ message: 'Erro ao baixar ofício.' })
+    }
+  })
+
   // ─── Pré-preenchimento para formulário de movimentação ───────────────────
   router.get('/requests/:id/approved-prefill', authenticateToken,
     authorizePermission('ACTION_REGISTER_MOVEMENT'),

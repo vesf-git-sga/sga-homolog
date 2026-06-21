@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { PlusCircle, RefreshCw, Search, Inbox, FileText } from 'lucide-react'
+import { PlusCircle, RefreshCw, Search, Inbox, FileText, ChevronRight } from 'lucide-react'
 import { useToast } from '../App'
 import StatusBadge from './StatusBadge'
 import RequestModal from './RequestModal'
@@ -218,14 +218,14 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Canal</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-600">Abertura</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filtered.map(r => (
                   <tr
                     key={r.id}
-                    onClick={() => setSelectedRequestId(r.id)}
-                    className="hover:bg-blue-50 cursor-pointer transition-colors"
+                    className="hover:bg-gray-50 transition-colors"
                   >
                     <td className="px-4 py-3 font-mono font-medium text-blue-700">{r.protocol}</td>
                     <td className="px-4 py-3 text-gray-700">{REQUEST_TYPE_LABELS[r.type] || r.type}</td>
@@ -238,6 +238,15 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
                     <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
                     <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
                       {new Date(r.created_at).toLocaleDateString('pt-BR')}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => setSelectedRequestId(r.id)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors whitespace-nowrap"
+                      >
+                        <FileText size={13} />
+                        Detalhes
+                      </button>
                     </td>
                   </tr>
                 ))}
