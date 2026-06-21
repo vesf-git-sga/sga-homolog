@@ -244,7 +244,8 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 			const err = await resp.json().catch(() => ({}));
 			throw new Error(err.message || 'Erro ao cadastrar pessoa.');
 		}
-		const newPerson = await resp.json();
+		// API retorna { message, person: {...} }
+		const { person: newPerson } = await resp.json();
 		setPeople((prev) => [...prev, newPerson]);
 		setSelectedPerson({ id: newPerson.id, full_name: newPerson.full_name });
 		setPersonSearch(newPerson.full_name);
