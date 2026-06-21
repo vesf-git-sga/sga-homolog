@@ -8344,11 +8344,14 @@ app.post('/api/asset-movements', authenticateToken, authorizePermission('ACTION_
         await client.query('COMMIT');
         await logAudit(req.user.id, 'create_movement', 'asset_movement', newMovementId, { type: movement_type, assets: asset_ids }, ipAddress);
 
-        // Atualiza status da Solicitação de TI vinculada (fora da transação principal para não reverter em caso de falha)
+        // Atualiza status da Solicitação de TI vinculada (fora da transação principal)
         if (request_id) {
             try {
                 const requestRepository = require('./repositories/requestRepository');
-                await requestRepository.updateRequestStatus(pool, parseInt(request_id), deliveryStatus, req.user.id);
+                await requestRepository.updateRequestStatus(
+                    pool, parseInt(request_id), deliveryStatus, req.user.id,
+                    `Movimentação #${newMovementId} registrada — status atualizado automaticamente.`
+                );
             } catch (requestErr) {
                 console.error(`[Solicitações] Erro ao atualizar status da solicitação ${request_id}:`, requestErr.message);
             }
@@ -8811,6 +8814,19 @@ app.post('/api/asset-movements/:id/confirm-delivery',
     );
 
     await client.query('COMMIT');
+
+    // Atualiza status da Solicitação de TI vinculada, se houver
+    if (movement.request_id) {
+        try {
+            const requestRepository = require('./repositories/requestRepository');
+            await requestRepository.updateRequestStatus(
+                pool, movement.request_id, 'confirmed', req.user.id,
+                `Entrega confirmada — Movimentação #${id} concluída.`
+            );
+        } catch (requestErr) {
+            console.error(`[Solicitações] Erro ao concluir solicitação ${movement.request_id}:`, requestErr.message);
+        }
+    }
 
     // 4. Loga a auditoria e envia a resposta de sucesso
     await logAudit(req.user.id, 'confirm_delivery', 'asset_movement', id, { receipt_path: req.file.path }, ipAddress);

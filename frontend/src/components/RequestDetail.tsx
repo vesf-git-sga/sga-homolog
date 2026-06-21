@@ -63,16 +63,31 @@ const MovementCard = ({ m }: { m: LinkedMovement }) => {
   const typeLabels: Record<string, string> = {
     loan: 'Empréstimo', exit: 'Saída', return: 'Devolução', maintenance: 'Manutenção', entry: 'Entrada',
   }
+  const deliveryStatusConfig: Record<string, { label: string; className: string }> = {
+    pending_confirmation: { label: 'Aguardando confirmação', className: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
+    confirmed:            { label: 'Entrega confirmada',     className: 'bg-green-100 text-green-700 border-green-200' },
+    cancelled:            { label: 'Cancelada',              className: 'bg-red-100 text-red-600 border-red-200' },
+  }
+  const statusInfo = deliveryStatusConfig[m.delivery_status] ?? {
+    label: m.delivery_status, className: 'bg-gray-100 text-gray-600 border-gray-200',
+  }
   return (
-    <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
-      <Truck size={16} className="text-gray-400 shrink-0" />
-      <div className="flex-1 min-w-0">
+    <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-2">
+      <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-700">#{m.id}</span>
-          <span className="text-xs text-gray-500">{typeLabels[m.movement_type] || m.movement_type}</span>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{m.asset_count} ativo(s)</span>
+          <Truck size={14} className="text-gray-400 shrink-0 mt-0.5" />
+          <span className="text-sm font-semibold text-gray-700">Movimentação #{m.id}</span>
+          <span className="text-xs text-gray-500">· {typeLabels[m.movement_type] || m.movement_type}</span>
         </div>
-        <p className="text-xs text-gray-400 mt-0.5">{m.responsible_name} · {new Date(m.created_at).toLocaleDateString('pt-BR')}</p>
+        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium whitespace-nowrap ${statusInfo.className}`}>
+          {statusInfo.label}
+        </span>
+      </div>
+      <div className="flex items-center gap-3 text-xs text-gray-400 pl-5">
+        <span>{m.asset_count} ativo(s) vinculado(s)</span>
+        {m.responsible_name && <><span>·</span><span>{m.responsible_name}</span></>}
+        <span>·</span>
+        <span>{new Date(m.created_at).toLocaleDateString('pt-BR')}</span>
       </div>
     </div>
   )
@@ -743,15 +758,31 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
 
               {/* ── Aba Movimentações ── */}
               {activeTab === 'movements' && (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {(!request.movements || request.movements.length === 0) ? (
-                    <div className="text-center py-8">
-                      <Truck size={32} className="mx-auto text-gray-300 mb-2" />
-                      <p className="text-sm text-gray-400">Nenhuma movimentação vinculada.</p>
+                    <div className="py-8 px-4">
+                      <div className="text-center">
+                        <Truck size={32} className="mx-auto text-gray-300 mb-2" />
+                        <p className="text-sm text-gray-500 font-medium">Nenhuma movimentação vinculada.</p>
+                      </div>
                       {request.status === 'aprovado' && (
-                        <p className="text-xs text-gray-400 mt-2 max-w-xs mx-auto">
-                          Para vincular, crie uma movimentação no fluxo de Logística & Operações e informe o protocolo <span className="font-mono text-blue-600">{request.protocol}</span>.
-                        </p>
+                        <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700 leading-relaxed">
+                          <p className="font-semibold mb-1">Próximo passo: registrar a movimentação</p>
+                          <p>
+                            Acesse <span className="font-medium">Logística &amp; Operações → Registrar Movimentação</span>,
+                            informe o protocolo <span className="font-mono font-bold">{request.protocol}</span> e
+                            selecione um ativo disponível. O status desta solicitação será atualizado automaticamente.
+                          </p>
+                        </div>
+                      )}
+                      {request.status === 'em_execucao' && (
+                        <div className="mt-4 p-3 bg-yellow-50 border border-yellow-100 rounded-lg text-xs text-yellow-700 leading-relaxed">
+                          <p className="font-semibold mb-1">Em execução — aguardando confirmação</p>
+                          <p>
+                            Uma movimentação foi criada. Após a confirmação da entrega (recibo assinado),
+                            esta solicitação será concluída automaticamente.
+                          </p>
+                        </div>
                       )}
                     </div>
                   ) : (

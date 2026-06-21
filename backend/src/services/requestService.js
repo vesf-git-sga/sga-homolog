@@ -62,15 +62,13 @@ const TRANSITIONS = {
     reprovado:  ['manager', 'admin'],
     cancelado:  ['manager', 'admin'],
   },
-  // aprovado → em_execucao e em_execucao → concluido são disparados
-  // automaticamente pelo updateRequestStatus (via movement), mas também
-  // podem ser acionados manualmente por manager/admin se necessário.
+  // aprovado → em_execucao: exclusivamente automático (criação de movimentação vinculada)
+  // em_execucao → concluido: exclusivamente automático (confirmação da movimentação)
+  // Transições manuais removidas para garantir rastreabilidade pelo fluxo de movimentações.
   aprovado: {
-    em_execucao: ['basic', 'operator', 'manager', 'admin'],
-    cancelado:   ['manager', 'admin'],
+    cancelado: ['manager', 'admin'],
   },
   em_execucao: {
-    concluido: ['basic', 'operator', 'manager', 'admin'],
     cancelado: ['manager', 'admin'],
   },
 }
