@@ -98,13 +98,17 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
   const [showScheduleVisit, setShowScheduleVisit] = useState(false)
   const [visitScheduledDate, setVisitScheduledDate] = useState('')
   const [visitScheduledTime, setVisitScheduledTime] = useState('')
-  const [visitAssignedTo, setVisitAssignedTo] = useState('')
+  const [visitAssignedTo, setVisitAssignedTo] = useState('')       // ID selecionado
+  const [visitAssignedSearch, setVisitAssignedSearch] = useState('') // texto digitado
+  const [visitAssignedOpen, setVisitAssignedOpen] = useState(false)
 
   // Editar agendamento existente
   const [editingVisitScheduleId, setEditingVisitScheduleId] = useState<number | null>(null)
   const [editScheduleDate, setEditScheduleDate] = useState('')
   const [editScheduleTime, setEditScheduleTime] = useState('')
-  const [editScheduleAssignedTo, setEditScheduleAssignedTo] = useState('')
+  const [editScheduleAssignedTo, setEditScheduleAssignedTo] = useState('')   // ID
+  const [editScheduleSearch, setEditScheduleSearch] = useState('')            // texto
+  const [editScheduleOpen, setEditScheduleOpen] = useState(false)
 
   // Registrar resultado (novo)
   const [completingVisitId, setCompletingVisitId] = useState<number | null>(null)
@@ -150,6 +154,11 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
     }
   }
 
+  const getUserSuggestions = (search: string) =>
+    search.length >= 2
+      ? users.filter(u => u.full_name.toLowerCase().includes(search.toLowerCase())).slice(0, 8)
+      : []
+
   const formatVisitDate = (d: string | null | undefined): string | null => {
     if (!d) return null
     const dateOnly = d.split('T')[0]
@@ -171,6 +180,7 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
       setVisitScheduledDate('')
       setVisitScheduledTime('')
       setVisitAssignedTo('')
+      setVisitAssignedSearch('')
       await loadRequest()
     } catch (err: any) {
       addToast(err?.response?.data?.message || 'Erro ao agendar visita.', 'error')
@@ -189,6 +199,7 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
       })
       addToast('Agendamento atualizado.', 'success')
       setEditingVisitScheduleId(null)
+      setEditScheduleSearch('')
       await loadRequest()
     } catch (err: any) {
       addToast(err?.response?.data?.message || 'Erro ao atualizar agendamento.', 'error')
@@ -417,180 +428,227 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
                     <div>
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Visitas Técnicas</p>
                       <div className="space-y-2">
-                        {request.visits.map(v => (
-                          <div key={v.id} className="p-3 bg-purple-50 rounded-lg border border-purple-100 text-sm">
-                            {/* Cabeçalho: badge de resultado + data/hora */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {v.result ? (
-                                v.result === 'constatada'
-                                  ? <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">Defeito Constatado</span>
-                                  : <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">Defeito Não Constatado</span>
-                              ) : (
-                                <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-medium">Pendente</span>
-                              )}
-                              {v.scheduled_date && (
-                                <span className="text-xs text-purple-600 flex items-center gap-1">
-                                  <Calendar size={11} />
-                                  {formatVisitDate(v.scheduled_date)}
-                                  {v.scheduled_time && ` às ${v.scheduled_time}`}
-                                </span>
-                              )}
+                        {request.visits.map(v => {
+                          const canEditSchedule = !v.completed_at && request.status === 'visita_tecnica_solicitada'
+                          const isEditingSchedule = editingVisitScheduleId === v.id
+                          const isRegisteringResult = completingVisitId === v.id
+                          const isEditingResult = editingVisitResultId === v.id
+
+                          return (
+                            <div key={v.id} className="rounded-lg border border-purple-100 text-sm overflow-hidden">
+
+                              {/* ── Seção de agendamento ── */}
+                              <div className="p-3 bg-purple-50">
+                                {isEditingSchedule ? (
+                                  /* Formulário de edição de agendamento */
+                                  <div className="space-y-2.5">
+                                    <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide">Editar agendamento</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="text-xs text-gray-600 mb-0.5 block">Data</label>
+                                        <input type="date" value={editScheduleDate}
+                                          onChange={e => setEditScheduleDate(e.target.value)}
+                                          className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300" />
+                                      </div>
+                                      <div>
+                                        <label className="text-xs text-gray-600 mb-0.5 block">Horário</label>
+                                        <input type="time" value={editScheduleTime}
+                                          onChange={e => setEditScheduleTime(e.target.value)}
+                                          className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300" />
+                                      </div>
+                                    </div>
+                                    <div className="relative">
+                                      <label className="text-xs text-gray-600 mb-0.5 block">Técnico responsável</label>
+                                      <input
+                                        type="text"
+                                        placeholder="Digite o nome do técnico…"
+                                        value={editScheduleSearch}
+                                        onChange={e => {
+                                          setEditScheduleSearch(e.target.value)
+                                          setEditScheduleAssignedTo('')
+                                          setEditScheduleOpen(true)
+                                        }}
+                                        onFocus={() => setEditScheduleOpen(true)}
+                                        onBlur={() => setTimeout(() => setEditScheduleOpen(false), 150)}
+                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300"
+                                      />
+                                      {editScheduleOpen && getUserSuggestions(editScheduleSearch).length > 0 && (
+                                        <ul className="absolute z-20 w-full mt-0.5 bg-white border border-gray-200 rounded-lg shadow-lg max-h-36 overflow-y-auto">
+                                          {getUserSuggestions(editScheduleSearch).map(u => (
+                                            <li key={u.id}>
+                                              <button type="button"
+                                                onMouseDown={() => {
+                                                  setEditScheduleSearch(u.full_name)
+                                                  setEditScheduleAssignedTo(String(u.id))
+                                                  setEditScheduleOpen(false)
+                                                }}
+                                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-purple-50 text-gray-700">
+                                                {u.full_name}
+                                              </button>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                      {editScheduleSearch && !editScheduleAssignedTo && (
+                                        <p className="text-xs text-amber-600 mt-0.5">Selecione um nome da lista</p>
+                                      )}
+                                    </div>
+                                    <div className="flex gap-2 pt-1">
+                                      <button onClick={() => { setEditingVisitScheduleId(null); setEditScheduleSearch('') }}
+                                        className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
+                                        Cancelar
+                                      </button>
+                                      <button onClick={() => handleUpdateVisitSchedule(v.id)} disabled={isActing}
+                                        className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60">
+                                        {isActing ? 'Salvando…' : 'Salvar'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  /* Visualização do agendamento */
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="space-y-1">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        {v.result ? (
+                                          v.result === 'constatada'
+                                            ? <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">Defeito Constatado</span>
+                                            : <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">Defeito Não Constatado</span>
+                                        ) : (
+                                          <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-medium">Pendente</span>
+                                        )}
+                                        {v.scheduled_date && (
+                                          <span className="text-xs text-purple-600 flex items-center gap-1">
+                                            <Calendar size={11} />
+                                            {formatVisitDate(v.scheduled_date)}
+                                            {v.scheduled_time && ` às ${v.scheduled_time}`}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {v.assigned_to_name && (
+                                        <p className="text-xs text-gray-500">Técnico: {v.assigned_to_name}</p>
+                                      )}
+                                    </div>
+                                    {canEditSchedule && (
+                                      <button
+                                        onClick={() => {
+                                          setEditingVisitScheduleId(v.id)
+                                          setEditScheduleDate(v.scheduled_date?.split('T')[0] || '')
+                                          setEditScheduleTime(v.scheduled_time || '')
+                                          setEditScheduleAssignedTo(v.assigned_to ? String(v.assigned_to) : '')
+                                          setEditScheduleSearch(v.assigned_to_name || '')
+                                        }}
+                                        className="text-xs text-purple-500 hover:text-purple-700 hover:underline shrink-0"
+                                      >
+                                        Editar
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* ── Separador ── */}
+                              <div className="border-t border-purple-100" />
+
+                              {/* ── Seção de resultado ── */}
+                              <div className="p-3 bg-white">
+                                {!v.completed_at ? (
+                                  isRegisteringResult ? (
+                                    <div className="space-y-2">
+                                      <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Registrar resultado</p>
+                                      <div className="flex gap-2">
+                                        {[
+                                          { value: 'constatada', label: 'Defeito Constatado' },
+                                          { value: 'nao_constatada', label: 'Não Constatado' },
+                                        ].map(opt => (
+                                          <button key={opt.value} type="button"
+                                            onClick={() => setVisitResult(opt.value as 'constatada' | 'nao_constatada')}
+                                            className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
+                                              visitResult === opt.value ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600'
+                                            }`}>
+                                            {opt.label}
+                                          </button>
+                                        ))}
+                                      </div>
+                                      <textarea rows={2} placeholder="Parecer técnico (opcional)…"
+                                        value={visitFindings} onChange={e => setVisitFindings(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none" />
+                                      <div className="flex gap-2">
+                                        <button onClick={() => { setCompletingVisitId(null); setVisitResult(''); setVisitFindings('') }}
+                                          className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
+                                          Cancelar
+                                        </button>
+                                        <button onClick={() => handleCompleteVisit(v.id)}
+                                          disabled={isActing || !visitResult}
+                                          className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60">
+                                          {isActing ? 'Salvando…' : 'Salvar'}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <button onClick={() => setCompletingVisitId(v.id)}
+                                      className="text-xs text-purple-600 hover:underline font-medium">
+                                      Registrar resultado
+                                    </button>
+                                  )
+                                ) : (
+                                  isEditingResult ? (
+                                    <div className="space-y-2">
+                                      <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Corrigir resultado</p>
+                                      <div className="flex gap-2">
+                                        {[
+                                          { value: 'constatada', label: 'Defeito Constatado' },
+                                          { value: 'nao_constatada', label: 'Não Constatado' },
+                                        ].map(opt => (
+                                          <button key={opt.value} type="button"
+                                            onClick={() => setEditVisitResult(opt.value as 'constatada' | 'nao_constatada')}
+                                            className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
+                                              editVisitResult === opt.value ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600'
+                                            }`}>
+                                            {opt.label}
+                                          </button>
+                                        ))}
+                                      </div>
+                                      <textarea rows={2} placeholder="Parecer técnico (opcional)…"
+                                        value={editVisitFindings} onChange={e => setEditVisitFindings(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none" />
+                                      <div className="flex gap-2">
+                                        <button onClick={() => { setEditingVisitResultId(null); setEditVisitResult(''); setEditVisitFindings('') }}
+                                          className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
+                                          Cancelar
+                                        </button>
+                                        <button onClick={() => handleUpdateVisitResult(v.id)}
+                                          disabled={isActing || !editVisitResult}
+                                          className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60">
+                                          {isActing ? 'Salvando…' : 'Salvar'}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center justify-between">
+                                      {v.findings && <p className="text-xs text-gray-500 italic truncate mr-2">"{v.findings}"</p>}
+                                      <button
+                                        onClick={() => {
+                                          setEditingVisitResultId(v.id)
+                                          setEditVisitResult(v.result || '')
+                                          setEditVisitFindings(v.findings || '')
+                                        }}
+                                        className="text-xs text-purple-500 hover:text-purple-700 hover:underline shrink-0"
+                                      >
+                                        Corrigir resultado
+                                      </button>
+                                    </div>
+                                  )
+                                )}
+                              </div>
                             </div>
-
-                            {v.assigned_to_name && <p className="text-xs text-gray-500 mt-1">Técnico: {v.assigned_to_name}</p>}
-                            {v.findings && <p className="text-xs text-gray-600 mt-1 italic">"{v.findings}"</p>}
-
-                            {/* Editar agendamento (visita pendente) */}
-                            {!v.completed_at && request.status === 'visita_tecnica_solicitada' && (
-                              editingVisitScheduleId === v.id ? (
-                                <div className="mt-3 space-y-2">
-                                  <p className="text-xs font-medium text-purple-700">Editar agendamento</p>
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <div>
-                                      <label className="text-xs text-gray-600 mb-0.5 block">Data</label>
-                                      <input type="date" value={editScheduleDate}
-                                        onChange={e => setEditScheduleDate(e.target.value)}
-                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300" />
-                                    </div>
-                                    <div>
-                                      <label className="text-xs text-gray-600 mb-0.5 block">Horário</label>
-                                      <input type="time" value={editScheduleTime}
-                                        onChange={e => setEditScheduleTime(e.target.value)}
-                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300" />
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <label className="text-xs text-gray-600 mb-0.5 block">Técnico responsável</label>
-                                    <select value={editScheduleAssignedTo}
-                                      onChange={e => setEditScheduleAssignedTo(e.target.value)}
-                                      className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300">
-                                      <option value="">Selecionar técnico…</option>
-                                      {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-                                    </select>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <button onClick={() => setEditingVisitScheduleId(null)}
-                                      className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
-                                      Cancelar
-                                    </button>
-                                    <button onClick={() => handleUpdateVisitSchedule(v.id)} disabled={isActing}
-                                      className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60">
-                                      {isActing ? 'Salvando…' : 'Salvar'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setEditingVisitScheduleId(v.id)
-                                    setEditScheduleDate(v.scheduled_date?.split('T')[0] || '')
-                                    setEditScheduleTime(v.scheduled_time || '')
-                                    setEditScheduleAssignedTo(v.assigned_to ? String(v.assigned_to) : '')
-                                  }}
-                                  className="mt-2 text-xs text-purple-600 hover:underline font-medium"
-                                >
-                                  Editar agendamento
-                                </button>
-                              )
-                            )}
-
-                            {/* Registrar resultado (visita pendente) */}
-                            {!v.completed_at && (
-                              completingVisitId === v.id ? (
-                                <div className="mt-3 space-y-2">
-                                  <p className="text-xs font-medium text-purple-700">Registrar resultado</p>
-                                  <div className="flex gap-2">
-                                    {[
-                                      { value: 'constatada', label: 'Defeito Constatado' },
-                                      { value: 'nao_constatada', label: 'Não Constatado' },
-                                    ].map(opt => (
-                                      <button key={opt.value} type="button"
-                                        onClick={() => setVisitResult(opt.value as 'constatada' | 'nao_constatada')}
-                                        className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
-                                          visitResult === opt.value ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600'
-                                        }`}>
-                                        {opt.label}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  <textarea rows={2} placeholder="Parecer técnico (opcional)…"
-                                    value={visitFindings} onChange={e => setVisitFindings(e.target.value)}
-                                    className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none" />
-                                  <div className="flex gap-2">
-                                    <button onClick={() => { setCompletingVisitId(null); setVisitResult(''); setVisitFindings('') }}
-                                      className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
-                                      Cancelar
-                                    </button>
-                                    <button onClick={() => handleCompleteVisit(v.id)}
-                                      disabled={isActing || !visitResult}
-                                      className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60">
-                                      {isActing ? 'Salvando…' : 'Salvar'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button onClick={() => setCompletingVisitId(v.id)}
-                                  className="mt-2 text-xs text-purple-600 hover:underline font-medium">
-                                  Registrar resultado
-                                </button>
-                              )
-                            )}
-
-                            {/* Editar resultado (visita concluída) */}
-                            {v.completed_at && (
-                              editingVisitResultId === v.id ? (
-                                <div className="mt-3 space-y-2">
-                                  <p className="text-xs font-medium text-purple-700">Corrigir resultado</p>
-                                  <div className="flex gap-2">
-                                    {[
-                                      { value: 'constatada', label: 'Defeito Constatado' },
-                                      { value: 'nao_constatada', label: 'Não Constatado' },
-                                    ].map(opt => (
-                                      <button key={opt.value} type="button"
-                                        onClick={() => setEditVisitResult(opt.value as 'constatada' | 'nao_constatada')}
-                                        className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
-                                          editVisitResult === opt.value ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600'
-                                        }`}>
-                                        {opt.label}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  <textarea rows={2} placeholder="Parecer técnico (opcional)…"
-                                    value={editVisitFindings} onChange={e => setEditVisitFindings(e.target.value)}
-                                    className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none" />
-                                  <div className="flex gap-2">
-                                    <button onClick={() => { setEditingVisitResultId(null); setEditVisitResult(''); setEditVisitFindings('') }}
-                                      className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
-                                      Cancelar
-                                    </button>
-                                    <button onClick={() => handleUpdateVisitResult(v.id)}
-                                      disabled={isActing || !editVisitResult}
-                                      className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60">
-                                      {isActing ? 'Salvando…' : 'Salvar'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setEditingVisitResultId(v.id)
-                                    setEditVisitResult(v.result || '')
-                                    setEditVisitFindings(v.findings || '')
-                                  }}
-                                  className="mt-2 text-xs text-purple-600 hover:underline font-medium"
-                                >
-                                  Corrigir resultado
-                                </button>
-                              )
-                            )}
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
                   )}
 
-                  {/* Agendar visita — visível sempre no fluxo de visita; bloqueado antes de "Solicitar" */}
-                  {showVisitSection && !showScheduleVisit && (
+                  {/* Agendar visita — bloqueado antes de "Solicitar" e oculto se já há agendamento */}
+                  {showVisitSection && !showScheduleVisit && (!request.visits || request.visits.length === 0) && (
                     <button
                       onClick={() => canScheduleVisit && setShowScheduleVisit(true)}
                       disabled={!canScheduleVisit}
@@ -609,13 +667,41 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
                     <div className="p-4 bg-purple-50 rounded-xl border border-purple-100 space-y-3">
                       <p className="text-sm font-medium text-purple-800">Agendar Visita Técnica</p>
                       <p className="text-xs text-purple-600">A visita é opcional e não vinculante. A gerência pode aprovar independente do resultado.</p>
-                      <div>
+                      <div className="relative">
                         <label className="text-xs text-gray-600 mb-1 block">Técnico responsável</label>
-                        <select value={visitAssignedTo} onChange={e => setVisitAssignedTo(e.target.value)}
-                          className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300">
-                          <option value="">Selecionar técnico…</option>
-                          {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-                        </select>
+                        <input
+                          type="text"
+                          placeholder="Digite o nome do técnico…"
+                          value={visitAssignedSearch}
+                          onChange={e => {
+                            setVisitAssignedSearch(e.target.value)
+                            setVisitAssignedTo('')
+                            setVisitAssignedOpen(true)
+                          }}
+                          onFocus={() => setVisitAssignedOpen(true)}
+                          onBlur={() => setTimeout(() => setVisitAssignedOpen(false), 150)}
+                          className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300"
+                        />
+                        {visitAssignedOpen && getUserSuggestions(visitAssignedSearch).length > 0 && (
+                          <ul className="absolute z-20 w-full mt-0.5 bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                            {getUserSuggestions(visitAssignedSearch).map(u => (
+                              <li key={u.id}>
+                                <button type="button"
+                                  onMouseDown={() => {
+                                    setVisitAssignedSearch(u.full_name)
+                                    setVisitAssignedTo(String(u.id))
+                                    setVisitAssignedOpen(false)
+                                  }}
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-purple-50 text-gray-700">
+                                  {u.full_name}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {visitAssignedSearch && !visitAssignedTo && (
+                          <p className="text-xs text-amber-600 mt-0.5">Selecione um nome da lista</p>
+                        )}
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -630,7 +716,7 @@ const RequestDetail = ({ requestId, currentUserRole, onClose }: RequestDetailPro
                         </div>
                       </div>
                       <div className="flex gap-2">
-                        <button onClick={() => setShowScheduleVisit(false)}
+                        <button onClick={() => { setShowScheduleVisit(false); setVisitAssignedSearch(''); setVisitAssignedTo('') }}
                           className="flex-1 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
                           Cancelar
                         </button>
