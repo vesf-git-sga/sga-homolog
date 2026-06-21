@@ -51,6 +51,10 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
   router.get('/requests', authenticateToken,
     (req, res) => controller.list(req, res, pool))
 
+  // Deve ficar antes de /requests/:id para não ser capturada como id numérico
+  router.get('/requests/movement-prefill', authenticateToken,
+    (req, res) => controller.getMovementPrefill(req, res, pool))
+
   router.get('/requests/:id', authenticateToken,
     (req, res) => controller.getById(req, res, pool))
 

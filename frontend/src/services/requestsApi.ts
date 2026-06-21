@@ -65,6 +65,28 @@ export interface ApprovedPrefill {
   requester_person_id: number
 }
 
+export interface MovementPrefillItem {
+  item_type_name: string
+  brand_name?: string | null
+  model_name?: string | null
+  description?: string | null
+  quantity: number
+}
+
+export interface MovementPrefill {
+  id: number
+  protocol: string
+  type: RequestType
+  status: RequestStatus
+  input_channel: InputChannel
+  input_channel_details?: string | null
+  requester_person_id: number
+  requester_name: string
+  unit_id: number
+  unit_name: string
+  items: MovementPrefillItem[]
+}
+
 export const requestsApi = {
   list: (filters?: RequestListFilters) =>
     axios.get<EquipmentRequest[]>(`${API_URL}/requests`, { params: filters }).then(r => r.data),
@@ -101,9 +123,13 @@ export const requestsApi = {
   listUsers: () =>
     axios.get<{ id: number; full_name: string }[]>(`${API_URL}/users/for-assignment`).then(r => r.data),
 
-  // Pré-preenchimento no form de movimentação
+  // Pré-preenchimento legado (por ID numérico)
   getApprovedPrefill: (id: number) =>
     axios.get<ApprovedPrefill>(`${API_URL}/requests/${id}/approved-prefill`).then(r => r.data),
+
+  // Pré-preenchimento rico por protocolo (novo — retorna solicitante, unidade, canal e itens)
+  getMovementPrefill: (protocol: string) =>
+    axios.get<MovementPrefill>(`${API_URL}/requests/movement-prefill`, { params: { protocol } }).then(r => r.data),
 
   // ─── Catálogo ───────────────────────────────────────────────────────────
   listItemTypes: () =>

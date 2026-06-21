@@ -346,6 +346,39 @@ async function findApprovedRequestById(pool, requestId) {
   return r.rows[0] || null
 }
 
+async function findRequestForMovementPrefill(pool, protocol) {
+  const r = await pool.query(
+    `SELECT
+       r.id, r.protocol, r.type, r.status,
+       r.input_channel, r.input_channel_details,
+       r.requester_person_id, p.full_name AS requester_name,
+       r.unit_id, u.name AS unit_name,
+       COALESCE(
+         json_agg(
+           json_build_object(
+             'item_type_name', it.name,
+             'brand_name',     cb.name,
+             'model_name',     cm.name,
+             'description',    rci.description,
+             'quantity',       rci.quantity
+           ) ORDER BY rci.id
+         ) FILTER (WHERE rci.id IS NOT NULL),
+         '[]'::json
+       ) AS items
+     FROM requests r
+     JOIN people p ON r.requester_person_id = p.id
+     JOIN units  u ON r.unit_id = u.id
+     LEFT JOIN request_catalog_items rci ON r.id  = rci.request_id
+     LEFT JOIN item_types            it  ON rci.item_type_id = it.id
+     LEFT JOIN catalog_brands        cb  ON rci.brand_id     = cb.id
+     LEFT JOIN catalog_models        cm  ON rci.model_id     = cm.id
+     WHERE r.protocol = $1 AND r.status = 'aprovado'
+     GROUP BY r.id, p.full_name, u.name`,
+    [protocol]
+  )
+  return r.rows[0] || null
+}
+
 module.exports = {
   create,
   findById,
@@ -365,4 +398,5 @@ module.exports = {
   personExists,
   findUnitById,
   findApprovedRequestById,
+  findRequestForMovementPrefill,
 }

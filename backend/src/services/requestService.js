@@ -323,6 +323,10 @@ async function findApprovedRequest(pool, requestId) {
   return repository.findApprovedRequestById(pool, requestId)
 }
 
+async function getMovementPrefill(pool, protocol) {
+  return repository.findRequestForMovementPrefill(pool, protocol)
+}
+
 module.exports = {
   createRequest,
   listRequests,
@@ -334,5 +338,6 @@ module.exports = {
   completeTechnicalVisit,
   updateRequestFromMovement,
   findApprovedRequest,
+  getMovementPrefill,
   getAllowedTransitions,
 }

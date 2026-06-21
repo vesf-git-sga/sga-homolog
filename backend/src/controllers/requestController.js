@@ -171,6 +171,19 @@ async function getApprovedPrefill(req, res, pool) {
   }
 }
 
+// Pré-preenchimento rico por protocolo: retorna solicitante, unidade, canal e itens solicitados.
+async function getMovementPrefill(req, res, pool) {
+  try {
+    const { protocol } = req.query
+    if (!protocol) return res.status(400).json({ message: 'Parâmetro protocol obrigatório.' })
+    const data = await service.getMovementPrefill(pool, protocol.trim().toUpperCase())
+    if (!data) return res.status(404).json({ message: 'Solicitação aprovada não encontrada para este protocolo.' })
+    res.status(200).json(data)
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao buscar solicitação.' })
+  }
+}
+
 module.exports = {
   create,
   list,
@@ -183,4 +196,5 @@ module.exports = {
   completeTechnicalVisit,
   listTechnicalVisits,
   getApprovedPrefill,
+  getMovementPrefill,
 }

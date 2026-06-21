@@ -38,6 +38,7 @@ import CdInventoryPage from './components/CdInventoryPage';
 import PendingTermsList from './components/PendingTermsList';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
 import RequestsPage from './components/RequestsPage';
+import { requestsApi, MovementPrefill } from './services/requestsApi';
 
 
 // --- LISTAS PADRÃO PARA COMBOS (DROPDOWNS) ---
@@ -3075,7 +3076,13 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
   const [expectedReturnDate, setExpectedReturnDate] = useState<string>('');
   const [requestChannelType, setRequestChannelType] = useState<'Email' | 'SEI' | 'Ordem Direta' | ''>('');
   const [requestChannelDetails, setRequestChannelDetails] = useState<string>('');
-  const [linkedRequestId, setLinkedRequestId] = useState<string>(''); // Protocolo opcional de solicitação aprovada
+  const [linkedRequestId, setLinkedRequestId] = useState<string>(''); // ID numérico para submissão
+
+  // ─── Protocolo de solicitação ────────────────────────────────────────────────
+  const [requestProtocol, setRequestProtocol] = useState<string>('');
+  const [requestPrefill, setRequestPrefill] = useState<MovementPrefill | null>(null);
+  const [requestPrefillLoading, setRequestPrefillLoading] = useState(false);
+  const [requestPrefillError, setRequestPrefillError] = useState<string | null>(null);
 
   // Estado dos periféricos padrão (Checkboxes)
   const [checkedPeripherals, setCheckedPeripherals] = useState<{ [key: string]: boolean }>({});
@@ -3151,6 +3158,50 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
   // --- FUNÇÕES DE MANIPULAÇÃO ---
   const handleSelectPerson = (person: Person) => { setSelectedPerson(person); setSolicitanteSearchTerm(person.full_name); setFilteredPeople([]); };
   const handleSelectUnit = (unit: Unit) => { setSelectedUnit(unit); setUnitSearchTerm(unit.name); setFilteredUnits([]); };
+
+  // ─── Protocolo de solicitação ────────────────────────────────────────────
+  const CHANNEL_MAP: Record<string, 'Email' | 'SEI' | 'Ordem Direta'> = { email: 'Email', sei: 'SEI' };
+
+  const handleProtocolLookup = async () => {
+    const proto = requestProtocol.trim().toUpperCase();
+    if (!proto) return;
+    setRequestPrefillLoading(true);
+    setRequestPrefillError(null);
+    setRequestPrefill(null);
+    try {
+      const data = await requestsApi.getMovementPrefill(proto);
+      setRequestPrefill(data);
+      setLinkedRequestId(String(data.id));
+      // Auto-preenche solicitante
+      const person = people.find(p => p.id === data.requester_person_id);
+      if (person) { setSelectedPerson(person); setSolicitanteSearchTerm(person.full_name); }
+      else { setSelectedPerson({ id: data.requester_person_id, full_name: data.requester_name, cpf: '', email: '' } as Person); setSolicitanteSearchTerm(data.requester_name); }
+      // Auto-preenche unidade
+      const unit = units.find(u => u.id === data.unit_id);
+      if (unit) { setSelectedUnit(unit); setUnitSearchTerm(unit.name); }
+      else { setUnitSearchTerm(data.unit_name); }
+      // Auto-preenche canal
+      if (data.input_channel && CHANNEL_MAP[data.input_channel]) {
+        setRequestChannelType(CHANNEL_MAP[data.input_channel]);
+      }
+      if (data.input_channel_details) setRequestChannelDetails(data.input_channel_details);
+    } catch (err: any) {
+      setRequestPrefillError(
+        err.response?.status === 404
+          ? 'Protocolo não encontrado ou solicitação não está aprovada.'
+          : 'Erro ao buscar solicitação. Verifique o protocolo e tente novamente.'
+      );
+    } finally {
+      setRequestPrefillLoading(false);
+    }
+  };
+
+  const handleClearProtocol = () => {
+    setRequestProtocol('');
+    setRequestPrefill(null);
+    setRequestPrefillError(null);
+    setLinkedRequestId('');
+  };
 
   const handleAssetUpdateChange = (assetId: number, field: 'imei' | 'sim_card_number', value: string) => {
     setAssetUpdates(prev => ({
@@ -3326,6 +3377,104 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
 
         <form onSubmit={handleProceedToConfirmation} className="space-y-6">
           <fieldset disabled={isAwaitingConfirmation || !!lastMovementId} className="space-y-6">
+
+            {/* ── PROTOCOLO DE SOLICITAÇÃO ─────────────────────────────────── */}
+            <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-4 space-y-3">
+              <h3 className="text-sm font-semibold text-indigo-800 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                Protocolo de Solicitação de TI
+                <span className="text-xs font-normal text-indigo-500">(opcional)</span>
+              </h3>
+
+              {!requestPrefill ? (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={requestProtocol}
+                    onChange={e => { setRequestProtocol(e.target.value.toUpperCase()); setRequestPrefillError(null); }}
+                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleProtocolLookup())}
+                    placeholder="Ex.: SGA-2026-0001"
+                    className="flex-1 px-3 py-2 border border-indigo-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-400 outline-none bg-white disabled:bg-gray-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleProtocolLookup}
+                    disabled={!requestProtocol.trim() || requestPrefillLoading}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  >
+                    {requestPrefillLoading ? 'Buscando...' : 'Buscar'}
+                  </button>
+                </div>
+              ) : null}
+
+              {requestPrefillError && (
+                <p className="text-sm text-red-600 flex items-center gap-1">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>
+                  {requestPrefillError}
+                </p>
+              )}
+
+              {requestPrefill && (() => {
+                const typeLabels: Record<string, string> = { emprestimo: 'Empréstimo', substituicao: 'Substituição', acrescimo: 'Acréscimo' };
+                const channelLabels: Record<string, string> = { email: 'E-mail', sei: 'SEI', chamado: 'Chamado' };
+                return (
+                  <div className="bg-white border border-indigo-200 rounded-lg overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-2 bg-indigo-100">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-indigo-900 text-sm">{requestPrefill.protocol}</span>
+                        <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">
+                          {typeLabels[requestPrefill.type] ?? requestPrefill.type}
+                        </span>
+                        <span className="text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">Aprovada</span>
+                      </div>
+                      <button type="button" onClick={handleClearProtocol} className="text-indigo-400 hover:text-indigo-700 transition-colors" title="Remover vínculo">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase font-medium mb-0.5">Solicitante</p>
+                        <p className="font-semibold text-gray-800">{requestPrefill.requester_name}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase font-medium mb-0.5">Unidade de Destino</p>
+                        <p className="font-semibold text-gray-800">{requestPrefill.unit_name}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase font-medium mb-0.5">Canal</p>
+                        <p className="font-semibold text-gray-800">
+                          {channelLabels[requestPrefill.input_channel] ?? requestPrefill.input_channel}
+                          {requestPrefill.input_channel_details && (
+                            <span className="block text-xs text-gray-500 font-normal">{requestPrefill.input_channel_details}</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    {requestPrefill.items.length > 0 && (
+                      <div className="border-t border-indigo-100 px-4 py-3">
+                        <p className="text-xs font-semibold text-indigo-700 uppercase mb-2">Ativo solicitado — referência para o registro:</p>
+                        <ul className="space-y-1">
+                          {requestPrefill.items.map((item, i) => (
+                            <li key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-800 font-bold text-xs flex-shrink-0 mt-0.5">{item.quantity}</span>
+                              <span>
+                                <span className="font-medium">{item.item_type_name}</span>
+                                {item.brand_name && <span className="text-gray-500"> · {item.brand_name}</span>}
+                                {item.model_name && <span className="text-gray-500"> {item.model_name}</span>}
+                                {item.description && <span className="text-gray-400 italic"> ({item.description})</span>}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="mt-2 text-xs text-indigo-500">Vincule um ativo disponível no estoque conforme as regras de negócio.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -3617,11 +3766,6 @@ const MovementModal = ({ onClose, onSave, assets: allAssets, people, units, hand
                     <option value="">Selecione...</option> <option value="Email">E-mail</option> <option value="SEI">SEI</option> <option value="Ordem Direta">Ordem Direta</option>
                   </select>
                   {requestChannelType === 'SEI' ? (<InputMask mask="99.999999/9999-99" value={requestChannelDetails} onChange={(e) => setRequestChannelDetails(e.target.value)}>{(inputProps: any) => <input {...inputProps} type="text" placeholder="Número do SEI" className="mt-2 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm disabled:bg-gray-100" required />}</InputMask>) : requestChannelType === 'Ordem Direta' && (<input type="text" placeholder="Nome e Cargo" value={requestChannelDetails} onChange={(e) => setRequestChannelDetails(e.target.value)} className="mt-2 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm disabled:bg-gray-100" required />)}
-                </div>
-                <div>
-                  <label htmlFor="linkedRequestId" className="block text-sm font-medium text-gray-700">Protocolo de Solicitação de TI <span className="text-xs text-gray-400 font-normal">(opcional)</span></label>
-                  <input type="text" id="linkedRequestId" value={linkedRequestId} onChange={(e) => setLinkedRequestId(e.target.value.replace(/\D/g, ''))} placeholder="ID numérico da solicitação aprovada" className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm disabled:bg-gray-100" />
-                  <p className="mt-1 text-xs text-gray-400">Preencha para vincular esta movimentação a uma Solicitação de TI aprovada.</p>
                 </div>
                 <div>
                   <label htmlFor="expectedReturnDate" className="block text-sm font-medium text-gray-700">Data Prevista Para Devolução</label>
