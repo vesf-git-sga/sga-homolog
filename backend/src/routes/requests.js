@@ -32,6 +32,18 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
     limits: { fileSize: 10 * 1024 * 1024 },
   })
 
+  // ─── Usuários para seleção de técnico (qualquer perfil autenticado) ────────
+  router.get('/users/for-assignment', authenticateToken, async (req, res) => {
+    try {
+      const result = await pool.query(
+        'SELECT id, full_name FROM users WHERE is_active = true ORDER BY full_name ASC'
+      )
+      res.status(200).json(result.rows)
+    } catch (err) {
+      res.status(500).json({ message: 'Erro interno.' })
+    }
+  })
+
   // ─── CRUD ───────────────────────────────────────────────────────────────
   router.post('/requests', authenticateToken, uploadOficio.single('oficio'),
     (req, res) => controller.create(req, res, pool, logAudit))
