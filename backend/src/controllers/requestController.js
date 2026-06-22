@@ -193,6 +193,30 @@ async function getVisitRoute(req, res, pool) {
   }
 }
 
+async function ackDitCiente(req, res, pool, logAudit) {
+  try {
+    const requestId = parseInt(req.params.id)
+    const result = await service.ditCiente(pool, requestId, req.user)
+    await logAudit(req.user.id, 'request_dit_ciente', 'requests', requestId, {}, req.ip)
+    res.status(200).json(result)
+  } catch (err) {
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('aprovada') || err.message.includes('já registrou') ||
+      err.message.includes('permissão') ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
+async function getUnavailableQueue(req, res, pool) {
+  try {
+    const entries = await service.getUnavailableQueue(pool)
+    res.status(200).json(entries)
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao buscar fila de indisponíveis.' })
+  }
+}
+
 module.exports = {
   create,
   list,
@@ -207,4 +231,6 @@ module.exports = {
   getApprovedPrefill,
   getMovementPrefill,
   getVisitRoute,
+  ackDitCiente,
+  getUnavailableQueue,
 }

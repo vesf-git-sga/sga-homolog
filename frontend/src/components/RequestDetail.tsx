@@ -10,6 +10,7 @@ import {
 	ArrowRight,
 	Download,
 	AlertTriangle,
+	CheckCheck,
 } from 'lucide-react';
 import { useToast, AuthContext } from '../App';
 import StatusBadge from './StatusBadge';
@@ -260,6 +261,20 @@ const RequestDetail = ({
 		}
 	};
 
+
+	const handleDitCiente = async () => {
+		if (!request) return;
+		setIsActing(true);
+		try {
+			await requestsApi.ackDitCiente(requestId);
+			addToast('Ciência da DIT registrada com sucesso.', 'success');
+			await loadRequest();
+		} catch (err: any) {
+			addToast(err?.response?.data?.message || 'Erro ao registrar ciência da DIT.', 'error');
+		} finally {
+			setIsActing(false);
+		}
+	};
 	const getUserSuggestions = (search: string) =>
 		search.length >= 2 ?
 			users
@@ -559,6 +574,27 @@ const RequestDetail = ({
 												</p>
 											</div>
 										)}
+								{(request.status === 'aprovado' || request.status === 'indisponivel_estoque') && (
+									<div className="col-span-2">
+										{request.dit_ciente_at ? (
+											<div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700 font-medium">
+												<CheckCheck size={13} className="shrink-0" />
+												<span>
+													DIT ciente em{' '}
+													{new Date(request.dit_ciente_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+													{' às '}
+													{new Date(request.dit_ciente_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+													{request.dit_ciente_by_name && ` · ${request.dit_ciente_by_name}`}
+												</span>
+											</div>
+										) : (
+											<div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 font-medium">
+												<Clock size={13} className="shrink-0" />
+												<span>Aguardando ciência da DIT</span>
+											</div>
+										)}
+									</div>
+								)}
 										<div>
 											<p className="text-xs text-gray-400 mb-0.5">
 												Aberto em
@@ -1563,7 +1599,18 @@ const RequestDetail = ({
 											</div>
 										</div>
 									:	<div className="flex gap-2 flex-wrap">
-										{request.allowed_transitions.map(
+									{request.status === 'aprovado' && !request.dit_ciente_at &&
+										['operator', 'manager', 'admin'].includes(currentUserRole) && (
+											<button
+												onClick={handleDitCiente}
+												disabled={isActing}
+												className="px-4 py-2 text-sm rounded-lg font-medium transition-colors bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
+											>
+												<CheckCheck size={14} className="inline mr-1.5" />
+												{isActing ? 'Aguarde…' : 'Marcar DIT Ciente'}
+											</button>
+										)}
+									{request.allowed_transitions.map(
 											(toStatus) => (
 												<button
 													key={toStatus}

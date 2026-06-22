@@ -10,6 +10,7 @@ export type RequestStatus =
   | 'em_execucao'
   | 'concluido'
   | 'cancelado'
+  | 'indisponivel_estoque'
 
 export type InputChannel = 'email' | 'sei' | 'chamado'
 
@@ -52,6 +53,9 @@ export interface EquipmentRequest {
   approved_by?: number | null
   approved_by_name?: string | null
   approved_at?: string | null
+  dit_ciente_at?: string | null
+  dit_ciente_by?: number | null
+  dit_ciente_by_name?: string | null
   created_at: string
   updated_at: string
   // carregados via getById
@@ -97,6 +101,22 @@ export interface LinkedMovement {
   responsible_name?: string
   asset_count: number
   created_at: string
+}
+
+export interface UnavailableQueueEntry {
+  id: number
+  protocol: string
+  type: RequestType
+  unit_name: string
+  unit_rpa?: string | null
+  requester_name: string
+  unavailable_since?: string | null
+  items: Array<{
+    item_type_name: string
+    brand_name?: string | null
+    model_name?: string | null
+    quantity: number
+  }>
 }
 
 export interface VisitRouteEntry {

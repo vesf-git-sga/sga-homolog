@@ -11,6 +11,7 @@ const STATUS_STYLES: Record<string, string> = {
   em_execucao:               'bg-orange-100 text-orange-800',
   concluido:                 'bg-teal-100 text-teal-800',
   cancelado:                 'bg-gray-100 text-gray-500',
+  indisponivel_estoque:      'bg-orange-100 text-orange-800',
 }
 
 interface StatusBadgeProps {

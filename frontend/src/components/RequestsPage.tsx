@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { PlusCircle, RefreshCw, Search, Inbox, FileText, MapPin } from 'lucide-react'
+import { PlusCircle, RefreshCw, Search, Inbox, FileText, MapPin, PackageX, ClipboardCheck } from 'lucide-react'
 import { useToast } from '../App'
 import StatusBadge from './StatusBadge'
 import RequestModal from './RequestModal'
 import RequestDetail from './RequestDetail'
 import VisitRoutePanel from './VisitRoutePanel'
+import UnavailableQueuePanel from './UnavailableQueuePanel'
 import { EquipmentRequest } from '../types/requests'
 import { REQUEST_TYPE_LABELS, REQUEST_STATUS_LABELS, REQUEST_CHANNEL_LABELS } from '../utils/translations'
 import { requestsApi } from '../services/requestsApi'
 
-const ACTIVE_STATUSES = ['requisitado', 'visita_tecnica_solicitada', 'visita_realizada', 'aguardando_aprovacao', 'aprovado', 'em_execucao']
+const ACTIVE_STATUSES = ['requisitado', 'visita_tecnica_solicitada', 'visita_realizada', 'aguardando_aprovacao', 'aprovado', 'em_execucao', 'indisponivel_estoque']
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 const KpiCard = ({
@@ -53,6 +54,8 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
 
   const [showRoutePanel, setShowRoutePanel] = useState(false)
   const [routeRefresh, setRouteRefresh] = useState(0)
+  const [showUnavailablePanel, setShowUnavailablePanel] = useState(false)
+  const [unavailableRefresh, setUnavailableRefresh] = useState(0)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null)
 
@@ -74,20 +77,24 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
   useEffect(() => { fetchRequests() }, [])
 
   // ─── KPIs ──────────────────────────────────────────────────────────────────
-  const kpiAtivas     = useMemo(() => requests.filter(r => ACTIVE_STATUSES.includes(r.status)).length, [requests])
-  const kpiAguardando = useMemo(() => requests.filter(r => r.status === 'aguardando_aprovacao').length, [requests])
-  const kpiAprovadas  = useMemo(() => requests.filter(r => r.status === 'aprovado').length, [requests])
-  const kpiConcluidas = useMemo(() => requests.filter(r => r.status === 'concluido').length, [requests])
-  const kpiVisitas    = useMemo(() => requests.filter(r => r.status === 'visita_tecnica_solicitada').length, [requests])
+  const kpiAtivas       = useMemo(() => requests.filter(r => ACTIVE_STATUSES.includes(r.status)).length, [requests])
+  const kpiAguardando   = useMemo(() => requests.filter(r => r.status === 'aguardando_aprovacao').length, [requests])
+  const kpiAprovadas    = useMemo(() => requests.filter(r => r.status === 'aprovado').length, [requests])
+  const kpiConcluidas   = useMemo(() => requests.filter(r => r.status === 'concluido').length, [requests])
+  const kpiVisitas      = useMemo(() => requests.filter(r => r.status === 'visita_tecnica_solicitada').length, [requests])
+  const kpiPendenteDIT  = useMemo(() => requests.filter(r => r.status === 'aprovado' && !r.dit_ciente_at).length, [requests])
+  const kpiIndisponivel = useMemo(() => requests.filter(r => r.status === 'indisponivel_estoque').length, [requests])
 
   // ─── Filtros ───────────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
     let list = requests
 
-    if (activeKpi === 'ativas')     list = list.filter(r => ACTIVE_STATUSES.includes(r.status))
-    if (activeKpi === 'aguardando') list = list.filter(r => r.status === 'aguardando_aprovacao')
-    if (activeKpi === 'aprovadas')  list = list.filter(r => r.status === 'aprovado')
-    if (activeKpi === 'concluidas') list = list.filter(r => r.status === 'concluido')
+    if (activeKpi === 'ativas')       list = list.filter(r => ACTIVE_STATUSES.includes(r.status))
+    if (activeKpi === 'aguardando')   list = list.filter(r => r.status === 'aguardando_aprovacao')
+    if (activeKpi === 'aprovadas')    list = list.filter(r => r.status === 'aprovado')
+    if (activeKpi === 'concluidas')   list = list.filter(r => r.status === 'concluido')
+    if (activeKpi === 'pendente_dit') list = list.filter(r => r.status === 'aprovado' && !r.dit_ciente_at)
+    if (activeKpi === 'indisponivel') list = list.filter(r => r.status === 'indisponivel_estoque')
 
     if (filterStatus) list = list.filter(r => r.status === filterStatus)
     if (filterType)   list = list.filter(r => r.type === filterType)
@@ -116,6 +123,7 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
     setSelectedRequestId(null)
     fetchRequests()
     if (showRoutePanel) setRouteRefresh(k => k + 1)
+    if (showUnavailablePanel) setUnavailableRefresh(k => k + 1)
   }
 
   const canCreate = ['basic', 'operator', 'manager', 'admin'].includes(currentUserRole)
@@ -145,7 +153,7 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         <KpiCard label="Ativas" count={kpiAtivas} icon={<Inbox size={22} className="text-blue-600" />}
           iconBg="bg-blue-50" countColor="text-blue-700" onClick={() => handleKpiClick('ativas')} active={activeKpi === 'ativas'} />
         <KpiCard label="Aguard. Aprovação" count={kpiAguardando} icon={<FileText size={22} className="text-yellow-600" />}
@@ -156,7 +164,12 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
           iconBg="bg-teal-50" countColor="text-teal-700" onClick={() => handleKpiClick('concluidas')} active={activeKpi === 'concluidas'} />
         <KpiCard label="Visitas Técnicas" count={kpiVisitas} icon={<MapPin size={22} className="text-purple-600" />}
           iconBg="bg-purple-50" countColor="text-purple-700"
-          onClick={() => setShowRoutePanel(prev => !prev)} active={showRoutePanel} />
+          onClick={() => { setShowRoutePanel(prev => !prev); setShowUnavailablePanel(false) }} active={showRoutePanel} />
+        <KpiCard label="Pendente DIT" count={kpiPendenteDIT} icon={<ClipboardCheck size={22} className="text-amber-600" />}
+          iconBg="bg-amber-50" countColor="text-amber-700" onClick={() => handleKpiClick('pendente_dit')} active={activeKpi === 'pendente_dit'} />
+        <KpiCard label="Sem Estoque" count={kpiIndisponivel} icon={<PackageX size={22} className="text-orange-600" />}
+          iconBg="bg-orange-50" countColor="text-orange-700"
+          onClick={() => { setShowUnavailablePanel(prev => !prev); setShowRoutePanel(false) }} active={showUnavailablePanel} />
       </div>
 
       {/* Painel de rotas de visitas */}
@@ -165,6 +178,15 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
           onOpenDetail={id => setSelectedRequestId(id)}
           onClose={() => setShowRoutePanel(false)}
           refreshKey={routeRefresh}
+        />
+      )}
+
+      {/* Painel de fila de indisponíveis */}
+      {showUnavailablePanel && (
+        <UnavailableQueuePanel
+          onOpenDetail={id => setSelectedRequestId(id)}
+          onClose={() => setShowUnavailablePanel(false)}
+          refreshKey={unavailableRefresh}
         />
       )}
 

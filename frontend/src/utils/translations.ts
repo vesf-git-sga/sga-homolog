@@ -44,6 +44,7 @@ export const REQUEST_STATUS_LABELS: Record<string, string> = {
   em_execucao:               'Em Execução',
   concluido:                 'Concluído',
   cancelado:                 'Cancelado',
+  indisponivel_estoque:      'Indisponível no Estoque',
 }
 
 export const REQUEST_CHANNEL_LABELS: Record<string, string> = {

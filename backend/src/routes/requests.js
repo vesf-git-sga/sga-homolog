@@ -55,6 +55,12 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
   router.get('/requests/visit-route', authenticateToken,
     (req, res) => controller.getVisitRoute(req, res, pool))
 
+  router.get('/requests/unavailable-queue', authenticateToken,
+    (req, res) => controller.getUnavailableQueue(req, res, pool))
+
+  router.patch('/requests/:id/dit-ciente', authenticateToken,
+    (req, res) => controller.ackDitCiente(req, res, pool, logAudit))
+
   router.get('/requests/movement-prefill', authenticateToken,
     authorizePermission('ACTION_REGISTER_MOVEMENT'),
     (req, res) => controller.getMovementPrefill(req, res, pool))

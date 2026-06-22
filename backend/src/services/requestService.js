@@ -66,6 +66,11 @@ const TRANSITIONS = {
   // em_execucao → concluido: exclusivamente automático (confirmação da movimentação)
   // Transições manuais removidas para garantir rastreabilidade pelo fluxo de movimentações.
   aprovado: {
+    indisponivel_estoque: ['operator', 'manager', 'admin'],
+    cancelado:            ['manager', 'admin'],
+  },
+  indisponivel_estoque: {
+    aprovado:  ['operator', 'manager', 'admin'],
     cancelado: ['manager', 'admin'],
   },
   em_execucao: {
@@ -343,6 +348,30 @@ async function getMovementPrefill(pool, protocol) {
   return repository.findRequestForMovementPrefill(pool, protocol)
 }
 
+// ─── Ciência da DIT ───────────────────────────────────────────────────────────
+
+async function ditCiente(pool, requestId, currentUser) {
+  const request = await repository.findById(pool, requestId)
+  if (!request) throw new Error('Solicitação não encontrada.')
+  if (request.status !== 'aprovado') {
+    throw new Error('A ciência da DIT só pode ser registrada quando a solicitação está aprovada.')
+  }
+  if (request.dit_ciente_at) {
+    throw new Error('A DIT já registrou ciência desta solicitação.')
+  }
+  const allowed = ['operator', 'manager', 'admin']
+  if (!allowed.includes(currentUser.role)) {
+    throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para registrar ciência da DIT.`)
+  }
+  return repository.markDitCiente(pool, requestId, currentUser.id)
+}
+
+// ─── Fila de indisponíveis no estoque ────────────────────────────────────────
+
+async function getUnavailableQueue(pool) {
+  return repository.findUnavailableQueue(pool)
+}
+
 module.exports = {
   createRequest,
   listRequests,
@@ -356,4 +385,6 @@ module.exports = {
   findApprovedRequest,
   getMovementPrefill,
   getAllowedTransitions,
+  ditCiente,
+  getUnavailableQueue,
 }

@@ -46,16 +46,18 @@ async function create(pool, data) {
 async function findById(pool, id) {
   const result = await pool.query(
     `SELECT r.*,
-            p.full_name AS requester_name,
-            u.name      AS unit_name,
-            u.rpa       AS unit_rpa,
+            p.full_name  AS requester_name,
+            u.name       AS unit_name,
+            u.rpa        AS unit_rpa,
             uc.full_name AS created_by_name,
-            ua.full_name AS approved_by_name
+            ua.full_name AS approved_by_name,
+            ud.full_name AS dit_ciente_by_name
      FROM requests r
      LEFT JOIN people  p  ON p.id = r.requester_person_id
      LEFT JOIN units   u  ON u.id = r.unit_id
      LEFT JOIN users   uc ON uc.id = r.created_by
      LEFT JOIN users   ua ON ua.id = r.approved_by
+     LEFT JOIN users   ud ON ud.id = r.dit_ciente_by
      WHERE r.id = $1`,
     [id]
   )
@@ -87,14 +89,16 @@ async function findAll(pool, filters = {}) {
 
   const result = await pool.query(
     `SELECT r.*,
-            p.full_name AS requester_name,
-            u.name      AS unit_name,
-            u.rpa       AS unit_rpa,
-            uc.full_name AS created_by_name
+            p.full_name  AS requester_name,
+            u.name       AS unit_name,
+            u.rpa        AS unit_rpa,
+            uc.full_name AS created_by_name,
+            ud.full_name AS dit_ciente_by_name
      FROM requests r
      LEFT JOIN people  p  ON p.id = r.requester_person_id
      LEFT JOIN units   u  ON u.id = r.unit_id
      LEFT JOIN users   uc ON uc.id = r.created_by
+     LEFT JOIN users   ud ON ud.id = r.dit_ciente_by
      ${where}
      ORDER BY r.created_at DESC`,
     params
@@ -173,7 +177,7 @@ async function updateRequestStatus(pool, requestId, movementStatus, userId, note
   if (!newRequestStatus) return null
 
   const ORDER = ['requisitado', 'visita_tecnica_solicitada', 'visita_realizada',
-    'aguardando_aprovacao', 'aprovado', 'em_execucao', 'concluido']
+    'aguardando_aprovacao', 'aprovado', 'indisponivel_estoque', 'em_execucao', 'concluido']
   const newIdx = ORDER.indexOf(newRequestStatus)
 
   // Validação de progressão dentro da transação (com FOR UPDATE), eliminando a race condition
@@ -409,6 +413,63 @@ async function findRequestsForVisitRoute(pool) {
   return r.rows
 }
 
+// ─── Ciência da DIT ──────────────────────────────────────────────────────────
+
+async function markDitCiente(pool, requestId, userId) {
+  await pool.query(
+    `UPDATE requests
+     SET dit_ciente_at = NOW(), dit_ciente_by = $1, updated_at = NOW()
+     WHERE id = $2`,
+    [userId, requestId]
+  )
+  await pool.query(
+    `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+     SELECT id, status, status, 'DIT ciente. Ciência registrada.', $1
+     FROM requests WHERE id = $2`,
+    [userId, requestId]
+  )
+  return findById(pool, requestId)
+}
+
+// ─── Fila de indisponíveis no estoque ────────────────────────────────────────
+
+async function findUnavailableQueue(pool) {
+  const r = await pool.query(
+    `SELECT r.id, r.protocol, r.type,
+            u.name AS unit_name,
+            u.rpa  AS unit_rpa,
+            p.full_name AS requester_name,
+            rsh.changed_at AS unavailable_since,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'item_type_name', it.name,
+                  'brand_name',     cb.name,
+                  'model_name',     cm.name,
+                  'quantity',       rci.quantity
+                ) ORDER BY rci.id
+              ) FILTER (WHERE rci.id IS NOT NULL),
+              '[]'::json
+            ) AS items
+     FROM requests r
+     JOIN units   u ON u.id = r.unit_id
+     JOIN people  p ON p.id = r.requester_person_id
+     LEFT JOIN LATERAL (
+       SELECT changed_at FROM request_status_history
+       WHERE request_id = r.id AND new_status = 'indisponivel_estoque'
+       ORDER BY id DESC LIMIT 1
+     ) rsh ON true
+     LEFT JOIN request_catalog_items rci ON rci.request_id = r.id
+     LEFT JOIN item_types            it  ON it.id = rci.item_type_id
+     LEFT JOIN catalog_brands        cb  ON cb.id = rci.brand_id
+     LEFT JOIN catalog_models        cm  ON cm.id = rci.model_id
+     WHERE r.status = 'indisponivel_estoque'
+     GROUP BY r.id, u.name, u.rpa, p.full_name, rsh.changed_at
+     ORDER BY rsh.changed_at ASC NULLS LAST`
+  )
+  return r.rows
+}
+
 module.exports = {
   create,
   findById,
@@ -430,4 +491,6 @@ module.exports = {
   findApprovedRequestById,
   findRequestForMovementPrefill,
   findRequestsForVisitRoute,
+  markDitCiente,
+  findUnavailableQueue,
 }
