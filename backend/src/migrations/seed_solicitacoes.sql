@@ -1,369 +1,403 @@
 -- =============================================================================
 -- Seed — Módulo de Solicitações de TI (dados de apresentação)
--- Senha de todos os usuários: Demo@2026
--- Executar APÓS a migration 010_solicitacoes_v4.sql.
--- Idempotente: usa ON CONFLICT DO NOTHING ou verifica existência antes de inserir.
+-- Executar APÓS 010_solicitacoes_v4.sql
+-- Usa IDs reais do banco — sem inserções em units/users/people/catalog
+--
+-- Usuários:
+--   admin    id=1   Administrador do Sistema
+--   manager  id=16  José Carlos Nascimento de Sá
+--   operator id=26  Robine Veloso de Oliveira Lima
+--   operator id=37  Divanildo de Oliveira Ramos Junior
+--
+-- Unidades (type=ESCOLAR):
+--   id=1664  CMEI CELESTE VIDAL             RPA 3
+--   id=1212  CRECHE ALTO JOSE DO PINHO      RPA 3
+--   id=1299  CRECHE MENINO JESUS CASA FORTE RPA 3
+--   id=1306  CMEI ALCIDES RESTELLI TEDESCO  RPA 4
+--   id=1409  CRECHE ASSOCIACAO CRISTA FEM.  RPA 4
+--   id=1457  CMEI DA MANGUEIRA              RPA 5
+--   id=1548  CRECHE DA ESTANCIA             RPA 5
+--
+-- Pessoas (people):
+--   id=1 Sandra Maria do Nascimento
+--   id=3 Mariana Pessoa
+--   id=4 Paloma Oliveira
+--   id=6 Roberto Salvador
+--   id=7 Lucas da Silva
+--   id=8 Evanilda Gomes
+--
+-- item_types: 1=Desktop 4=Notebook 6=Monitor 7=Impressora 10=Projetor
+-- brands:     2=DELL 3=LG 4=HP 6=POSITIVO 8=CASIO 10=AOC 15=LENOVO
+-- models:     3=XJ-F211WN(Projetor) 7=THINKSTANTION P340(Desktop)
+--             11=445 G9(Notebook)   14=24BL550J-B(Monitor)
+--             20=24E3QF(Monitor)    21=LATITUDE 3420(Notebook)
+--             23=THINKPAD E14(Notebook) 25=MASTER D610(Desktop)
 -- =============================================================================
 
 BEGIN;
 
--- ─── Usuários (um por perfil) ─────────────────────────────────────────────────
--- Senha: Demo@2026  →  hash bcrypt cost=10
-
-INSERT INTO users (username, email, password_hash, full_name, role, job_title, is_active)
-VALUES
-  ('admin.demo',    'admin@demo.sga',    '$2b$10$JxzZFMwODOCps8ONkhtD7eF8UO5LzYkSnCV.JcCj0b2cMcZote88u', 'Administrador Demo',         'admin',    'Administrador do Sistema',      true),
-  ('gestor.demo',   'gestor@demo.sga',   '$2b$10$JxzZFMwODOCps8ONkhtD7eF8UO5LzYkSnCV.JcCj0b2cMcZote88u', 'Carlos Andrade (Gestor)',    'manager',  'Gerente de TI',                 true),
-  ('tecnico.demo',  'tecnico@demo.sga',  '$2b$10$JxzZFMwODOCps8ONkhtD7eF8UO5LzYkSnCV.JcCj0b2cMcZote88u', 'Ana Tavares (Técnica DIT)', 'operator', 'Técnica de Suporte TI',         true),
-  ('atendente.demo','atendente@demo.sga','$2b$10$JxzZFMwODOCps8ONkhtD7eF8UO5LzYkSnCV.JcCj0b2cMcZote88u', 'Roberto Lima (Atendente)',  'basic',    'Atendente de Protocolo',        true)
-ON CONFLICT (username) DO NOTHING;
-
--- ─── Unidades (6 unidades em 3 RPAs distintas) ───────────────────────────────
-
-INSERT INTO units (name, code, type, rpa, address)
-VALUES
-  ('EMEF Prof. João Pessoa',          'EMEF-001', 'escola',     'RPA 3', 'Av. Principal, 100 — Boa Vista'),
-  ('EMEF Santos Dumont',              'EMEF-002', 'escola',     'RPA 3', 'Rua das Flores, 250 — Madalena'),
-  ('EMEF Padre Anchieta',             'EMEF-003', 'escola',     'RPA 5', 'Estrada do Arraial, 800 — Casa Amarela'),
-  ('Escola Municipal Dom Helder',     'EMEF-004', 'escola',     'RPA 5', 'Rua da Paz, 412 — Dois Unidos'),
-  ('Gerência Regional Norte',         'GRE-N',    'gerencia',   'RPA 4', 'Av. Norte, 1.500 — Arruda'),
-  ('Secretaria Municipal de Educação','SME-001',  'secretaria', NULL,    'Rua da Aurora, 300 — Santo Antônio')
-ON CONFLICT (code) DO NOTHING;
-
--- ─── Solicitantes (pessoas vinculadas às unidades) ───────────────────────────
-
-INSERT INTO people (full_name, cpf, email, job_title, unit_id)
-SELECT v.full_name, v.cpf, v.email, v.job_title, u.id
-FROM (VALUES
-  ('Maria Aparecida da Silva',  '111.111.111-01', 'maria.silva@demo.sga',    'Diretora',               'EMEF-001'),
-  ('José Carlos Ferreira',      '111.111.111-02', 'jose.ferreira@demo.sga',  'Diretor',                'EMEF-002'),
-  ('Sandra Leal Oliveira',      '111.111.111-03', 'sandra.oliveira@demo.sga','Diretora',               'EMEF-003'),
-  ('Paulo Roberto Mendes',      '111.111.111-04', 'paulo.mendes@demo.sga',   'Diretor',                'EMEF-004'),
-  ('Luciana Farias Costa',      '111.111.111-05', 'luciana.farias@demo.sga', 'Gerente Regional',       'GRE-N'),
-  ('Fernando Augusto Ramos',    '111.111.111-06', 'fernando.ramos@demo.sga', 'Coordenador Pedagógico', 'SME-001')
-) AS v(full_name, cpf, email, job_title, codigo_unidade)
-JOIN units u ON u.code = v.codigo_unidade
-ON CONFLICT (cpf) DO NOTHING;
-
--- ─── Catálogo: marcas e modelos ───────────────────────────────────────────────
-
-INSERT INTO catalog_brands (name)
-VALUES ('Dell'), ('Lenovo'), ('HP'), ('Epson'), ('Samsung')
-ON CONFLICT (name) DO NOTHING;
-
--- Modelos (usamos subqueries para não depender de IDs fixos)
-INSERT INTO catalog_models (name, brand_id, item_type_id)
-SELECT v.nome, b.id, it.id
-FROM (VALUES
-  ('Inspiron 15 3000',   'Dell',    'Notebook'),
-  ('ThinkPad E14',       'Lenovo',  'Notebook'),
-  ('OptiPlex 3000',      'Dell',    'Desktop'),
-  ('IdeaCentre 3',       'Lenovo',  'Desktop'),
-  ('EliteDisplay E24',   'HP',      'Monitor'),
-  ('S24F350',            'Samsung', 'Monitor'),
-  ('L3150',              'Epson',   'Impressora'),
-  ('LaserJet M110w',     'HP',      'Impressora')
-) AS v(nome, marca, tipo)
-JOIN catalog_brands b  ON b.name = v.marca
-JOIN item_types     it ON it.name = v.tipo
-ON CONFLICT (brand_id, name, item_type_id) DO NOTHING;
-
--- ─── Solicitações (10 registros cobrindo todos os status) ────────────────────
--- Usamos CTEs para resolver IDs por nome e manter o seed legível.
-
 DO $$
-DECLARE
-  -- usuários
-  uid_admin    INT; uid_gestor  INT; uid_tecnico INT; uid_atend INT;
-  -- pessoas
-  pid_maria    INT; pid_jose    INT; pid_sandra  INT;
-  pid_paulo    INT; pid_luciana INT; pid_fernando INT;
-  -- unidades
-  eid_emef001  INT; eid_emef002 INT; eid_emef003 INT;
-  eid_emef004  INT; eid_gren    INT; eid_sme     INT;
-  -- item_types
-  it_note INT; it_desk INT; it_mon INT; it_imp INT;
-  -- brands
-  b_dell INT; b_lenovo INT; b_hp INT; b_epson INT; b_samsung INT;
-  -- models
-  m_inspiron INT; m_thinkpad INT; m_optiplex INT; m_ideacentre INT;
-  m_elitedisp INT; m_s24 INT; m_l3150 INT; m_laserjet INT;
-  -- solicitações criadas
-  r_id INT;
+DECLARE r_id INT;
 BEGIN
-  -- Resolve IDs
-  SELECT id INTO uid_admin   FROM users WHERE username = 'admin.demo';
-  SELECT id INTO uid_gestor  FROM users WHERE username = 'gestor.demo';
-  SELECT id INTO uid_tecnico FROM users WHERE username = 'tecnico.demo';
-  SELECT id INTO uid_atend   FROM users WHERE username = 'atendente.demo';
 
-  SELECT id INTO pid_maria    FROM people WHERE cpf = '111.111.111-01';
-  SELECT id INTO pid_jose     FROM people WHERE cpf = '111.111.111-02';
-  SELECT id INTO pid_sandra   FROM people WHERE cpf = '111.111.111-03';
-  SELECT id INTO pid_paulo    FROM people WHERE cpf = '111.111.111-04';
-  SELECT id INTO pid_luciana  FROM people WHERE cpf = '111.111.111-05';
-  SELECT id INTO pid_fernando FROM people WHERE cpf = '111.111.111-06';
+-- ── 1. Requisitado — acréscimo notebooks ─────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00001') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,notes,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00001','acrescimo','requisitado','email',1,1664,
+    'Laboratório sem equipamentos funcionais para o ano letivo. Solicitação urgente.',
+    37, NOW()-'14 days'::interval, NOW()-'14 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,4,15,23,15);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES (r_id,NULL,'requisitado','Solicitação registrada via e-mail.',37,NOW()-'14 days'::interval);
+END IF;
 
-  SELECT id INTO eid_emef001 FROM units WHERE code = 'EMEF-001';
-  SELECT id INTO eid_emef002 FROM units WHERE code = 'EMEF-002';
-  SELECT id INTO eid_emef003 FROM units WHERE code = 'EMEF-003';
-  SELECT id INTO eid_emef004 FROM units WHERE code = 'EMEF-004';
-  SELECT id INTO eid_gren    FROM units WHERE code = 'GRE-N';
-  SELECT id INTO eid_sme     FROM units WHERE code = 'SME-001';
+-- ── 2. Requisitado — empréstimo projetor ─────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00002') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,notes,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00002','emprestimo','requisitado','sei',3,1306,
+    'Projetor para uso nas atividades pedagógicas do segundo semestre.',
+    26, NOW()-'9 days'::interval, NOW()-'9 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,10,8,3,2);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES (r_id,NULL,'requisitado','Solicitação registrada via SEI.',26,NOW()-'9 days'::interval);
+END IF;
 
-  SELECT id INTO it_note FROM item_types WHERE name = 'Notebook';
-  SELECT id INTO it_desk FROM item_types WHERE name = 'Desktop';
-  SELECT id INTO it_mon  FROM item_types WHERE name = 'Monitor';
-  SELECT id INTO it_imp  FROM item_types WHERE name = 'Impressora';
+-- ── 3. Visita Técnica — agendada RPA 3 ───────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00003') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00003','substituicao','visita_tecnica_solicitada','chamado','CHM-2026-4521',
+    4,1212,'avaria',37,NOW()-'11 days'::interval,NOW()-'9 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,1,15,7,3);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',37,NOW()-'11 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica agendada para verificação.',37,NOW()-'9 days'::interval);
+  INSERT INTO technical_visits (request_id,assigned_to,scheduled_date,scheduled_time,created_by,created_at)
+  VALUES (r_id,26,CURRENT_DATE+3,'09:00',37,NOW()-'9 days'::interval);
+END IF;
 
-  SELECT id INTO b_dell    FROM catalog_brands WHERE name = 'Dell';
-  SELECT id INTO b_lenovo  FROM catalog_brands WHERE name = 'Lenovo';
-  SELECT id INTO b_hp      FROM catalog_brands WHERE name = 'HP';
-  SELECT id INTO b_epson   FROM catalog_brands WHERE name = 'Epson';
-  SELECT id INTO b_samsung FROM catalog_brands WHERE name = 'Samsung';
+-- ── 4. Visita Técnica — agendada RPA 4 ───────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00004') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00004','substituicao','visita_tecnica_solicitada','chamado','CHM-2026-4673',
+    6,1409,'avaria',26,NOW()-'8 days'::interval,NOW()-'6 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,4,4,11,5);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',26,NOW()-'8 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica agendada.',26,NOW()-'6 days'::interval);
+  INSERT INTO technical_visits (request_id,assigned_to,scheduled_date,scheduled_time,created_by,created_at)
+  VALUES (r_id,37,CURRENT_DATE+1,'13:30',26,NOW()-'6 days'::interval);
+END IF;
 
-  SELECT id INTO m_inspiron   FROM catalog_models WHERE name = 'Inspiron 15 3000';
-  SELECT id INTO m_thinkpad   FROM catalog_models WHERE name = 'ThinkPad E14';
-  SELECT id INTO m_optiplex   FROM catalog_models WHERE name = 'OptiPlex 3000';
-  SELECT id INTO m_ideacentre FROM catalog_models WHERE name = 'IdeaCentre 3';
-  SELECT id INTO m_elitedisp  FROM catalog_models WHERE name = 'EliteDisplay E24';
-  SELECT id INTO m_s24        FROM catalog_models WHERE name = 'S24F350';
-  SELECT id INTO m_l3150      FROM catalog_models WHERE name = 'L3150';
-  SELECT id INTO m_laserjet   FROM catalog_models WHERE name = 'LaserJet M110w';
+-- ── 5. Visita Técnica — sem agendamento RPA 5 (painel de rotas) ──────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00005') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00005','substituicao','visita_tecnica_solicitada','chamado','CHM-2026-4800',
+    7,1457,'avaria',26,NOW()-'5 days'::interval,NOW()-'4 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,7,4,NULL,2);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',26,NOW()-'5 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica solicitada. Aguardando agendamento.',26,NOW()-'4 days'::interval);
+  INSERT INTO technical_visits (request_id,assigned_to,created_by,created_at)
+  VALUES (r_id,37,26,NOW()-'4 days'::interval);
+END IF;
 
-  -- ── 1. Requisitado (recém-aberto, aguardando triagem) ──────────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00001') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, notes, created_by,
-       created_at, updated_at)
-    VALUES
-      ('SOL-2026-00001', 'emprestimo', 'requisitado', 'email', NULL,
-       pid_maria, eid_emef001,
-       'Laboratório de informática sem equipamentos funcionais para o ano letivo.',
-       uid_atend,
-       NOW() - INTERVAL '10 days', NOW() - INTERVAL '10 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_note, b_dell, m_inspiron, 15);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES (r_id, NULL, 'requisitado', 'Solicitação criada.', uid_atend, NOW() - INTERVAL '10 days');
-  END IF;
+-- ── 6. Visita Técnica — sem agendamento RPA 5 (segunda, para densidade da rota)
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00006') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00006','substituicao','visita_tecnica_solicitada','chamado','CHM-2026-4855',
+    8,1548,'avaria',37,NOW()-'3 days'::interval,NOW()-'2 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,1,6,25,2);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',37,NOW()-'3 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica solicitada. Aguardando agendamento.',37,NOW()-'2 days'::interval);
+  INSERT INTO technical_visits (request_id,assigned_to,created_by,created_at)
+  VALUES (r_id,26,37,NOW()-'2 days'::interval);
+END IF;
 
-  -- ── 2. Visita Técnica Solicitada (com visita agendada) ─────────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00002') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, fundamentacao, created_by,
-       created_at, updated_at)
-    VALUES
-      ('SOL-2026-00002', 'substituicao', 'visita_tecnica_solicitada', 'chamado', 'CHM-2026-4521',
-       pid_jose, eid_emef002, 'avaria',
-       uid_atend,
-       NOW() - INTERVAL '8 days', NOW() - INTERVAL '7 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_desk, b_dell, m_optiplex, 3);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,          'requisitado',             'Solicitação criada.',              uid_atend,  NOW() - INTERVAL '8 days'),
-      (r_id, 'requisitado', 'visita_tecnica_solicitada','Visita técnica solicitada.',       uid_tecnico, NOW() - INTERVAL '7 days');
-    INSERT INTO technical_visits
-      (request_id, assigned_to, scheduled_date, scheduled_time, created_by, created_at)
-    VALUES
-      (r_id, uid_tecnico, CURRENT_DATE + 2, '09:00', uid_tecnico, NOW() - INTERVAL '6 days');
-  END IF;
+-- ── 7. Visita Realizada (aguardando encaminhamento para aprovação) ────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00007') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00007','substituicao','visita_realizada','chamado','CHM-2026-3977',
+    1,1299,'avaria',26,NOW()-'20 days'::interval,NOW()-'10 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,6,3,14,8);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',26,NOW()-'20 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica agendada.',26,NOW()-'18 days'::interval),
+    (r_id,'visita_tecnica_solicitada','visita_realizada','Visita concluída. Defeito constatado: monitores com queima de placa.',37,NOW()-'10 days'::interval);
+  INSERT INTO technical_visits (request_id,assigned_to,scheduled_date,scheduled_time,result,findings,completed_by,completed_at,created_by,created_at)
+  VALUES (r_id,37,CURRENT_DATE-11,'10:00','constatada','Queima de placa de vídeo em 8 monitores LG do laboratório de informática.',37,NOW()-'10 days'::interval,26,NOW()-'18 days'::interval);
+END IF;
 
-  -- ── 3. Visita Técnica Solicitada — sem agendamento (para rota) ─────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00003') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, fundamentacao, created_by,
-       created_at, updated_at)
-    VALUES
-      ('SOL-2026-00003', 'substituicao', 'visita_tecnica_solicitada', 'chamado', 'CHM-2026-4588',
-       pid_sandra, eid_emef003, 'avaria',
-       uid_atend,
-       NOW() - INTERVAL '5 days', NOW() - INTERVAL '4 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_imp, b_epson, m_l3150, 2);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,          'requisitado',             'Solicitação criada.',        uid_atend,  NOW() - INTERVAL '5 days'),
-      (r_id, 'requisitado', 'visita_tecnica_solicitada','Visita técnica solicitada.', uid_tecnico, NOW() - INTERVAL '4 days');
-  END IF;
+-- ── 8. Aguardando Aprovação — acréscimo multi-item ───────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00008') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00008','acrescimo','aguardando_aprovacao','sei','23.1.0000456/2026-12',
+    4,1664,26,NOW()-'18 days'::interval,NOW()-'5 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES
+    (r_id,4,15,23,10),
+    (r_id,6,10,20,10);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'18 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para análise e aprovação da gestão.',16,NOW()-'5 days'::interval);
+END IF;
 
-  -- ── 4. Aguardando Aprovação ────────────────────────────────────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00004') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, created_by,
-       created_at, updated_at)
-    VALUES
-      ('SOL-2026-00004', 'acrescimo', 'aguardando_aprovacao', 'sei', '23.1.0000456/2026-12',
-       pid_luciana, eid_gren,
-       uid_atend,
-       NOW() - INTERVAL '12 days', NOW() - INTERVAL '3 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES
-      (r_id, it_note, b_lenovo, m_thinkpad,   5),
-      (r_id, it_mon,  b_samsung, m_s24,        5);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,          'requisitado',        'Solicitação criada.',                  uid_atend,  NOW() - INTERVAL '12 days'),
-      (r_id, 'requisitado', 'aguardando_aprovacao','Encaminhado para aprovação da gestão.',uid_gestor, NOW() - INTERVAL '3 days');
-  END IF;
+-- ── 9. Aguardando Aprovação — substituição pós-visita ────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00009') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00009','substituicao','aguardando_aprovacao','chamado','CHM-2026-4100',
+    8,1306,'avaria',37,NOW()-'22 days'::interval,NOW()-'4 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,1,2,21,4);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',37,NOW()-'22 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica agendada.',37,NOW()-'20 days'::interval),
+    (r_id,'visita_tecnica_solicitada','aguardando_aprovacao','Visita realizada. Defeito constatado. Encaminhado para aprovação.',37,NOW()-'4 days'::interval);
+  INSERT INTO technical_visits (request_id,assigned_to,scheduled_date,scheduled_time,result,findings,completed_by,completed_at,created_by,created_at)
+  VALUES (r_id,37,CURRENT_DATE-15,'14:00','constatada','4 desktops com defeito no HD. Substituição necessária.',37,NOW()-'4 days'::interval,37,NOW()-'20 days'::interval);
+END IF;
 
-  -- ── 5. Aprovado — DIT ainda não ciente (KPI "Pendente DIT") ───────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00005') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, approved_by, approved_at, created_by,
-       created_at, updated_at)
-    VALUES
-      ('SOL-2026-00005', 'emprestimo', 'aprovado', 'sei', '23.1.0000501/2026-03',
-       pid_paulo, eid_emef004,
-       uid_gestor, NOW() - INTERVAL '1 day',
-       uid_atend,
-       NOW() - INTERVAL '15 days', NOW() - INTERVAL '1 day')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_desk, b_lenovo, m_ideacentre, 8);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,                 'requisitado',        'Solicitação criada.',         uid_atend,  NOW() - INTERVAL '15 days'),
-      (r_id, 'requisitado',        'aguardando_aprovacao','Encaminhado para aprovação.', uid_gestor, NOW() - INTERVAL '3 days'),
-      (r_id, 'aguardando_aprovacao','aprovado',           'Aprovado pela gestão.',       uid_gestor, NOW() - INTERVAL '1 day');
-  END IF;
+-- ── 10. Aprovado — DIT ainda não ciente ──────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00010') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,approved_by,approved_at,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00010','acrescimo','aprovado','email',
+    3,1457,16,NOW()-'1 day'::interval,
+    26,NOW()-'16 days'::interval,NOW()-'1 day'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,1,6,25,6);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'16 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para aprovação.',16,NOW()-'3 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'1 day'::interval);
+END IF;
 
-  -- ── 6. Aprovado — DIT ciente (pronto para separação) ──────────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00006') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, approved_by, approved_at,
-       dit_ciente_at, dit_ciente_by,
-       created_by, created_at, updated_at)
-    VALUES
-      ('SOL-2026-00006', 'acrescimo', 'aprovado', 'email', NULL,
-       pid_fernando, eid_sme,
-       uid_gestor, NOW() - INTERVAL '3 days',
-       NOW() - INTERVAL '2 days', uid_tecnico,
-       uid_atend,
-       NOW() - INTERVAL '20 days', NOW() - INTERVAL '2 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES
-      (r_id, it_note, b_dell, m_inspiron,  3),
-      (r_id, it_mon,  b_hp,   m_elitedisp, 3);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,                 'requisitado',        'Solicitação criada.',          uid_atend,  NOW() - INTERVAL '20 days'),
-      (r_id, 'requisitado',        'aguardando_aprovacao','Encaminhado para aprovação.',  uid_gestor, NOW() - INTERVAL '5 days'),
-      (r_id, 'aguardando_aprovacao','aprovado',           'Aprovado pela gestão.',        uid_gestor, NOW() - INTERVAL '3 days'),
-      (r_id, 'aprovado',           'aprovado',           'DIT ciente. Ciência registrada.', uid_tecnico, NOW() - INTERVAL '2 days');
-  END IF;
+-- ── 11. Aprovado — DIT ainda não ciente (segundo — KPI Pendente DIT = 2) ──────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00011') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,approved_by,approved_at,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00011','emprestimo','aprovado','sei','23.1.0000701/2026-05',
+    7,1548,16,NOW()-'2 days'::interval,
+    37,NOW()-'20 days'::interval,NOW()-'2 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,4,4,11,8);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',37,NOW()-'20 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para aprovação.',16,NOW()-'4 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'2 days'::interval);
+END IF;
 
-  -- ── 7. Indisponível no Estoque (KPI "Sem Estoque") ────────────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00007') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, approved_by, approved_at,
-       dit_ciente_at, dit_ciente_by,
-       created_by, created_at, updated_at)
-    VALUES
-      ('SOL-2026-00007', 'emprestimo', 'indisponivel_estoque', 'sei', '23.1.0000612/2026-04',
-       pid_maria, eid_emef001,
-       uid_gestor, NOW() - INTERVAL '10 days',
-       NOW() - INTERVAL '9 days', uid_tecnico,
-       uid_atend,
-       NOW() - INTERVAL '25 days', NOW() - INTERVAL '7 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_note, b_lenovo, m_thinkpad, 20);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,                 'requisitado',        'Solicitação criada.',                        uid_atend,  NOW() - INTERVAL '25 days'),
-      (r_id, 'requisitado',        'aguardando_aprovacao','Encaminhado para aprovação.',               uid_gestor, NOW() - INTERVAL '12 days'),
-      (r_id, 'aguardando_aprovacao','aprovado',           'Aprovado pela gestão.',                     uid_gestor, NOW() - INTERVAL '10 days'),
-      (r_id, 'aprovado',           'aprovado',           'DIT ciente. Ciência registrada.',            uid_tecnico, NOW() - INTERVAL '9 days'),
-      (r_id, 'aprovado',           'indisponivel_estoque','Notebooks ThinkPad indisponíveis em estoque. Solicitação entra em fila de espera.', uid_tecnico, NOW() - INTERVAL '7 days');
-  END IF;
+-- ── 12. Aprovado — DIT ciente ─────────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00012') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00012','acrescimo','aprovado','email',
+    1,1212,16,NOW()-'5 days'::interval,
+    NOW()-'4 days'::interval,26,
+    26,NOW()-'25 days'::interval,NOW()-'4 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES
+    (r_id,4,2,21,5),
+    (r_id,6,10,20,5);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'25 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para aprovação.',16,NOW()-'7 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'5 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente. Ciência registrada.',26,NOW()-'4 days'::interval);
+END IF;
 
-  -- ── 8. Em Execução (movimentação vinculada em andamento) ──────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00008') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, approved_by, approved_at,
-       dit_ciente_at, dit_ciente_by,
-       created_by, created_at, updated_at)
-    VALUES
-      ('SOL-2026-00008', 'substituicao', 'em_execucao', 'chamado', 'CHM-2026-3901',
-       pid_sandra, eid_emef003, 'avaria',
-       uid_gestor, NOW() - INTERVAL '20 days',
-       NOW() - INTERVAL '18 days', uid_tecnico,
-       uid_atend,
-       NOW() - INTERVAL '30 days', NOW() - INTERVAL '5 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_desk, b_dell, m_optiplex, 2);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,                 'requisitado',        'Solicitação criada.',                                uid_atend,  NOW() - INTERVAL '30 days'),
-      (r_id, 'requisitado',        'visita_tecnica_solicitada','Visita técnica solicitada.',                   uid_tecnico, NOW() - INTERVAL '28 days'),
-      (r_id, 'visita_tecnica_solicitada','aguardando_aprovacao','Visita concluída. Resultado: Defeito constatado.', uid_tecnico, NOW() - INTERVAL '25 days'),
-      (r_id, 'aguardando_aprovacao','aprovado',           'Aprovado pela gestão.',                             uid_gestor, NOW() - INTERVAL '20 days'),
-      (r_id, 'aprovado',           'aprovado',           'DIT ciente. Ciência registrada.',                   uid_tecnico, NOW() - INTERVAL '18 days'),
-      (r_id, 'aprovado',           'em_execucao',        'Movimentação #3 registrada — status atualizado automaticamente.', uid_tecnico, NOW() - INTERVAL '5 days');
-  END IF;
+-- ── 13. Aprovado — DIT ciente (substituição) ──────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00013') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00013','substituicao','aprovado','chamado','CHM-2026-3801',
+    6,1299,'avaria',16,NOW()-'8 days'::interval,
+    NOW()-'6 days'::interval,37,
+    37,NOW()-'30 days'::interval,NOW()-'6 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,1,15,7,3);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',37,NOW()-'30 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica agendada.',37,NOW()-'28 days'::interval),
+    (r_id,'visita_tecnica_solicitada','aguardando_aprovacao','Defeito constatado. Encaminhado para aprovação.',37,NOW()-'15 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'8 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente. Ciência registrada.',37,NOW()-'6 days'::interval);
+END IF;
 
-  -- ── 9. Concluído (ciclo completo) ─────────────────────────────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00009') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, approved_by, approved_at,
-       dit_ciente_at, dit_ciente_by,
-       created_by, created_at, updated_at)
-    VALUES
-      ('SOL-2026-00009', 'emprestimo', 'concluido', 'email', NULL,
-       pid_paulo, eid_emef004,
-       uid_gestor, NOW() - INTERVAL '35 days',
-       NOW() - INTERVAL '33 days', uid_tecnico,
-       uid_atend,
-       NOW() - INTERVAL '45 days', NOW() - INTERVAL '15 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_imp, b_hp, m_laserjet, 1);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,                 'requisitado',        'Solicitação criada.',                                   uid_atend,  NOW() - INTERVAL '45 days'),
-      (r_id, 'requisitado',        'aguardando_aprovacao','Encaminhado para aprovação.',                          uid_gestor, NOW() - INTERVAL '40 days'),
-      (r_id, 'aguardando_aprovacao','aprovado',           'Aprovado pela gestão.',                                uid_gestor, NOW() - INTERVAL '35 days'),
-      (r_id, 'aprovado',           'aprovado',           'DIT ciente. Ciência registrada.',                      uid_tecnico, NOW() - INTERVAL '33 days'),
-      (r_id, 'aprovado',           'em_execucao',        'Movimentação registrada — status atualizado automaticamente.', uid_tecnico, NOW() - INTERVAL '20 days'),
-      (r_id, 'em_execucao',        'concluido',          'Entrega confirmada — movimentação concluída.',          uid_tecnico, NOW() - INTERVAL '15 days');
-  END IF;
+-- ── 14. Indisponível no Estoque — Notebook (KPI "Sem Estoque") ───────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00014') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00014','acrescimo','indisponivel_estoque','sei','23.1.0000612/2026-04',
+    4,1664,16,NOW()-'15 days'::interval,
+    NOW()-'13 days'::interval,26,
+    26,NOW()-'35 days'::interval,NOW()-'10 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,4,15,23,20);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'35 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para aprovação.',16,NOW()-'18 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'15 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente. Ciência registrada.',26,NOW()-'13 days'::interval),
+    (r_id,'aprovado','indisponivel_estoque','ThinkPad E14 indisponíveis em estoque. Solicitação entra em fila de espera.',26,NOW()-'10 days'::interval);
+END IF;
 
-  -- ── 10. Cancelado ─────────────────────────────────────────────────────────
-  IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00010') THEN
-    INSERT INTO requests
-      (protocol, type, status, input_channel, input_channel_details,
-       requester_person_id, unit_id, created_by,
-       created_at, updated_at)
-    VALUES
-      ('SOL-2026-00010', 'acrescimo', 'cancelado', 'sei', '23.1.0000288/2026-01',
-       pid_jose, eid_emef002,
-       uid_atend,
-       NOW() - INTERVAL '50 days', NOW() - INTERVAL '42 days')
-    RETURNING id INTO r_id;
-    INSERT INTO request_catalog_items (request_id, item_type_id, brand_id, model_id, quantity)
-    VALUES (r_id, it_mon, b_samsung, m_s24, 4);
-    INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by, changed_at)
-    VALUES
-      (r_id, NULL,         'requisitado','Solicitação criada.',                                    uid_atend,  NOW() - INTERVAL '50 days'),
-      (r_id, 'requisitado','cancelado',  'Cancelado: unidade não necessita mais dos equipamentos.',uid_gestor, NOW() - INTERVAL '42 days');
-  END IF;
+-- ── 15. Indisponível no Estoque — Desktop ────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00015') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00015','emprestimo','indisponivel_estoque','email',
+    8,1409,16,NOW()-'20 days'::interval,
+    NOW()-'18 days'::interval,37,
+    37,NOW()-'40 days'::interval,NOW()-'12 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,1,6,25,12);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',37,NOW()-'40 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para aprovação.',16,NOW()-'23 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'20 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente. Ciência registrada.',37,NOW()-'18 days'::interval),
+    (r_id,'aprovado','indisponivel_estoque','Desktops Positivo MASTER D610 sem estoque. Aguardará reposição.',37,NOW()-'12 days'::interval);
+END IF;
+
+-- ── 16. Em Execução ───────────────────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00016') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00016','acrescimo','em_execucao','email',
+    3,1306,16,NOW()-'28 days'::interval,
+    NOW()-'26 days'::interval,26,
+    26,NOW()-'45 days'::interval,NOW()-'8 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,4,4,11,5);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'45 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para aprovação.',16,NOW()-'30 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'28 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente. Ciência registrada.',26,NOW()-'26 days'::interval),
+    (r_id,'aprovado','em_execucao','Movimentação vinculada — entrega em andamento.',26,NOW()-'8 days'::interval);
+END IF;
+
+-- ── 17. Em Execução — substituição ───────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00017') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00017','substituicao','em_execucao','chamado','CHM-2026-3200',
+    7,1548,'avaria',16,NOW()-'35 days'::interval,
+    NOW()-'33 days'::interval,37,
+    37,NOW()-'55 days'::interval,NOW()-'7 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,6,10,20,4);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto por avaria.',37,NOW()-'55 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita técnica agendada.',37,NOW()-'53 days'::interval),
+    (r_id,'visita_tecnica_solicitada','aguardando_aprovacao','Defeito constatado. Encaminhado.',37,NOW()-'45 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'35 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente. Ciência registrada.',37,NOW()-'33 days'::interval),
+    (r_id,'aprovado','em_execucao','Movimentação vinculada — retirada e entrega em andamento.',37,NOW()-'7 days'::interval);
+END IF;
+
+-- ── 18. Concluído ─────────────────────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00018') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00018','acrescimo','concluido','email',
+    1,1212,16,NOW()-'50 days'::interval,
+    NOW()-'48 days'::interval,26,
+    26,NOW()-'70 days'::interval,NOW()-'20 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,4,2,21,3);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'70 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para aprovação.',16,NOW()-'55 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado pela gestão.',16,NOW()-'50 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente. Ciência registrada.',26,NOW()-'48 days'::interval),
+    (r_id,'aprovado','em_execucao','Movimentação vinculada — entrega iniciada.',26,NOW()-'30 days'::interval),
+    (r_id,'em_execucao','concluido','Entrega confirmada — movimentação concluída com sucesso.',26,NOW()-'20 days'::interval);
+END IF;
+
+-- ── 19. Concluído — segundo (substituição ciclo completo) ─────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00019') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,input_channel_details,requester_person_id,unit_id,fundamentacao,approved_by,approved_at,dit_ciente_at,dit_ciente_by,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00019','substituicao','concluido','chamado','CHM-2026-2500',
+    6,1409,'avaria',16,NOW()-'60 days'::interval,
+    NOW()-'58 days'::interval,37,
+    37,NOW()-'80 days'::interval,NOW()-'25 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,1,15,7,2);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Chamado aberto.',37,NOW()-'80 days'::interval),
+    (r_id,'requisitado','visita_tecnica_solicitada','Visita agendada.',37,NOW()-'78 days'::interval),
+    (r_id,'visita_tecnica_solicitada','aguardando_aprovacao','Defeito constatado.',37,NOW()-'70 days'::interval),
+    (r_id,'aguardando_aprovacao','aprovado','Aprovado.',16,NOW()-'60 days'::interval),
+    (r_id,'aprovado','aprovado','DIT ciente.',37,NOW()-'58 days'::interval),
+    (r_id,'aprovado','em_execucao','Entrega iniciada.',37,NOW()-'40 days'::interval),
+    (r_id,'em_execucao','concluido','Desktops substituídos. Movimentação encerrada.',37,NOW()-'25 days'::interval);
+END IF;
+
+-- ── 20. Reprovado ─────────────────────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00020') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,notes,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00020','acrescimo','reprovado','email',
+    3,1306,'Solicitação não atende os critérios mínimos para acréscimo de equipamentos.',
+    16,NOW()-'40 days'::interval,NOW()-'32 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,4,15,23,30);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'40 days'::interval),
+    (r_id,'requisitado','aguardando_aprovacao','Encaminhado para análise.',16,NOW()-'35 days'::interval),
+    (r_id,'aguardando_aprovacao','reprovado','Reprovado: quantidade solicitada (30 unidades) supera o limite por solicitação.',16,NOW()-'32 days'::interval);
+END IF;
+
+-- ── 21. Cancelado ─────────────────────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM requests WHERE protocol = 'SOL-2026-00021') THEN
+  INSERT INTO requests (protocol,type,status,input_channel,requester_person_id,unit_id,created_by,created_at,updated_at)
+  VALUES ('SOL-2026-00021','emprestimo','cancelado','email',
+    8,1457,26,NOW()-'60 days'::interval,NOW()-'52 days'::interval)
+  RETURNING id INTO r_id;
+  INSERT INTO request_catalog_items (request_id,item_type_id,brand_id,model_id,quantity)
+  VALUES (r_id,10,8,3,1);
+  INSERT INTO request_status_history (request_id,old_status,new_status,notes,changed_by,changed_at)
+  VALUES
+    (r_id,NULL,'requisitado','Solicitação registrada.',26,NOW()-'60 days'::interval),
+    (r_id,'requisitado','cancelado','Cancelado a pedido da unidade — projetor foi emprestado de outra escola.',16,NOW()-'52 days'::interval);
+END IF;
 
 END $$;
 
