@@ -171,7 +171,6 @@ async function updateRequestStatus(pool, requestId, movementStatus, userId, note
   const statusMap = {
     pending_confirmation: 'em_execucao',
     confirmed:            'concluido',
-    cancelled:            'aprovado',
   }
   const newRequestStatus = statusMap[movementStatus]
   if (!newRequestStatus) return null

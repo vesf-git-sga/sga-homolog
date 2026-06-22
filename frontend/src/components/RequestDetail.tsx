@@ -43,6 +43,11 @@ const TRANSITION_LABELS: Record<string, string> = {
 	em_execucao: 'Marcar em Execução',
 	concluido: 'Concluir',
 	cancelado: 'Cancelar',
+	indisponivel_estoque: 'Marcar Indisponível no Estoque',
+};
+
+const TRANSITION_LABELS_FROM_UNAVAILABLE: Record<string, string> = {
+	aprovado: 'Equipamento Disponível',
 };
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['cancelado', 'reprovado']);
@@ -51,6 +56,7 @@ const TRANSITION_STYLES: Record<string, string> = {
 	aprovado: 'bg-green-600 hover:bg-green-700 text-white',
 	reprovado: 'bg-red-600 hover:bg-red-700 text-white',
 	cancelado: 'bg-gray-500 hover:bg-gray-600 text-white',
+	indisponivel_estoque: 'bg-orange-500 hover:bg-orange-600 text-white',
 	visita_tecnica_solicitada: 'bg-purple-600 hover:bg-purple-700 text-white',
 	aguardando_aprovacao: 'bg-yellow-600 hover:bg-yellow-700 text-white',
 	em_execucao: 'bg-orange-600 hover:bg-orange-700 text-white',
@@ -1631,13 +1637,12 @@ const RequestDetail = ({
 													}}
 													className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${TRANSITION_STYLES[toStatus] || 'bg-blue-600 hover:bg-blue-700 text-white'}`}
 												>
-													{TRANSITION_LABELS[
-														toStatus
-													] ||
-														REQUEST_STATUS_LABELS[
-															toStatus
-														] ||
-														toStatus}
+													{(request.status === 'indisponivel_estoque' &&
+														TRANSITION_LABELS_FROM_UNAVAILABLE[toStatus])
+														? TRANSITION_LABELS_FROM_UNAVAILABLE[toStatus]
+														: (TRANSITION_LABELS[toStatus] ||
+															REQUEST_STATUS_LABELS[toStatus] ||
+															toStatus)}
 												</button>
 											),
 										)}
