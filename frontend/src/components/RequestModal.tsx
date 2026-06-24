@@ -97,6 +97,7 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 	const [showPersonDrop, setShowPersonDrop] = useState(false);
 	const [selectedUnitId, setSelectedUnitId] = useState<number | ''>('');
 	const [emailPrefilled, setEmailPrefilled] = useState(false);
+	const [personUnitPrefilled, setPersonUnitPrefilled] = useState(false);
 
 	// ── Modal de nova pessoa ───────────────────────────────────────────────
 	const [showNewPersonModal, setShowNewPersonModal] = useState(false);
@@ -221,11 +222,17 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 				.slice(0, 50)
 		:	[];
 
-	const handleSelectPerson = (p: { id: number; full_name: string }) => {
+	const handleSelectPerson = (p: PersonEntry) => {
 		setSelectedPerson(p);
 		setPersonSearch(p.full_name);
 		setShowPersonDrop(false);
 		setEmailPrefilled(false);
+		if (p.unit_id) {
+			setSelectedUnitId(p.unit_id);
+			setPersonUnitPrefilled(true);
+		} else {
+			setPersonUnitPrefilled(false);
+		}
 	};
 
 	// ─── Cadastro de nova pessoa ──────────────────────────────────────────────
@@ -593,6 +600,7 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 									setSelectedPerson(null);
 									setShowPersonDrop(true);
 									setEmailPrefilled(false);
+									setPersonUnitPrefilled(false);
 								}}
 								onFocus={() => setShowPersonDrop(true)}
 								onBlur={() =>
@@ -645,6 +653,7 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 										:	'',
 									);
 									setEmailPrefilled(false);
+									setPersonUnitPrefilled(false);
 								}}
 								className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
 							>
@@ -658,7 +667,13 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 							{emailPrefilled && selectedUnitId && (
 								<p className="mt-1 text-xs text-indigo-600 flex items-center gap-1">
 									<span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500" />
-									Lotação preenchida automaticamente — pode ser alterada
+									Lotação preenchida automaticamente pelo e-mail — pode ser alterada
+								</p>
+							)}
+							{personUnitPrefilled && selectedUnitId && (
+								<p className="mt-1 text-xs text-blue-600 flex items-center gap-1">
+									<span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" />
+									Unidade preenchida automaticamente pelo solicitante — pode ser alterada
 								</p>
 							)}
 						</div>

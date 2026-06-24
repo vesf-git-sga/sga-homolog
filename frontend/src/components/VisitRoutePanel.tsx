@@ -124,7 +124,7 @@ const VisitRoutePanel = ({ onOpenDetail, onClose, refreshKey }: Props) => {
                     <div className="flex items-center gap-1.5">
                       <MapPin size={12} className="text-white/70 shrink-0" />
                       <span className="text-xs font-bold text-white tracking-wide">
-                        {isNoRpa ? 'Sem RPA definida' : group.rpa}
+                        {isNoRpa ? 'Sem RPA definida' : `RPA ${group.rpa}`}
                       </span>
                     </div>
                     <span className="text-xs font-semibold bg-white/20 text-white px-2 py-0.5 rounded-full">
