@@ -287,16 +287,17 @@ const TabletDashboard: React.FC<TabletDashboardProps> = ({ API_URL, onNavigateTo
           </div>
       </div>
 
-      {/* 2. GRÁFICOS (MANTIDOS IGUAIS) */}
+      {/* 2. GRÁFICOS (CORRIGIDOS PARA EVITAR CORTE DE TEXTO) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
             <h3 className="font-bold text-gray-700 mb-4 flex items-center"><BarChart2 className="w-5 h-5 mr-2 text-blue-600"/> Progresso por RPA</h3>
             <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={charts.byRPA} layout="vertical" margin={{ left: 20 }}>
+                    <BarChart data={charts.byRPA} layout="vertical" margin={{ left: 10, right: 20 }}>
                         <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
                         <XAxis type="number" hide />
-                        <YAxis dataKey="name" type="category" width={40} tick={{fontSize: 11, fontWeight: 'bold'}} />
+                        {/* width ampliado para 70 para não cortar nomes como "Indefinido" */}
+                        <YAxis dataKey="name" type="category" width={70} tick={{fontSize: 11, fontWeight: 'bold'}} />
                         <Tooltip cursor={{fill: 'transparent'}} />
                         <Bar dataKey="delivered" name="Entregue" stackId="a" fill="#10b981" radius={[0, 4, 4, 0]} barSize={20} />
                         <Bar dataKey="total" name="Total" stackId="b" fill="#f3f4f6" radius={[0, 4, 4, 0]} barSize={20} />
@@ -309,9 +310,11 @@ const TabletDashboard: React.FC<TabletDashboardProps> = ({ API_URL, onNavigateTo
             <h3 className="font-bold text-gray-700 mb-4 flex items-center"><Users className="w-5 h-5 mr-2 text-blue-600"/> Distribuição por Ano de Ensino</h3>
             <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={charts.byYear} margin={{ top: 10, right: 10, left: 0, bottom: 30 }}>
+                    {/* margin bottom ampliada para 60 para não cortar nomes rotacionados como "CORREÇÃO DE FLUXO" */}
+                    <BarChart data={charts.byYear} margin={{ top: 10, right: 10, left: 0, bottom: 60 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="name" tick={{fontSize: 10}} interval={0} angle={-45} textAnchor="end" height={60} />
+                        {/* height do XAxis ampliada para 70 */}
+                        <XAxis dataKey="name" tick={{fontSize: 10}} interval={0} angle={-45} textAnchor="end" height={70} />
                         <YAxis />
                         <Tooltip />
                         <Bar dataKey="total" name="Total" fill="#e5e7eb" radius={[4, 4, 0, 0]} barSize={20} />

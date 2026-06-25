@@ -4240,66 +4240,61 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
   try {
     const { whereClause, values } = buildDashboardFilters(req.query);
 
-    // 1. Totais Gerais
-    const totalRes = await pool.query(`SELECT COUNT(*) FROM tablet_eligible_students s WHERE 1=1 ${whereClause}`, values);
+    // 1. Totais Gerais (DISTINCT para evitar duplicação por histórico de trocas)
+    const totalRes = await pool.query(`SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s WHERE 1=1 ${whereClause}`, values);
     const total = parseInt(totalRes.rows[0].count);
 
     const deliveredRes = await pool.query(`
-        SELECT COUNT(dbi.id) 
+        SELECT COUNT(DISTINCT s.id)
         FROM delivery_batch_items dbi
         JOIN tablet_eligible_students s ON dbi.eligible_student_id = s.id
         WHERE dbi.delivery_status IN ('realizada', 'confirmed') ${whereClause}
     `, values);
     const delivered = parseInt(deliveredRes.rows[0].count);
 
-    // >>> CORREÇÃO 1: PENDENTES GERAIS (Ignora os Devolvidos e Planejados) <<<
     const pendingRes = await pool.query(`
-        SELECT COUNT(s.id) FROM tablet_eligible_students s
+        SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s
         WHERE 1=1 ${whereClause}
         AND s.id NOT IN (
-            SELECT eligible_student_id FROM delivery_batch_items 
+            SELECT eligible_student_id FROM delivery_batch_items
             WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido')
         )
     `, values);
     const pendingGeneral = parseInt(pendingRes.rows[0].count);
 
-    // =========================================================
-    // 2. O FUNIL DA DEMANDA PCD (ALUNOS) COM FILTRO APLICADO
-    // =========================================================
+    // 2. O FUNIL DA DEMANDA PCD (ALUNOS)
     const totalPcdRes = await pool.query(`
-        SELECT COUNT(*) FROM tablet_eligible_students s 
+        SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s
         WHERE s.requires_livox = TRUE ${whereClause}
     `, values);
     const totalPcd = parseInt(totalPcdRes.rows[0].count);
 
     const allocatedPcdRes = await pool.query(`
-        SELECT COUNT(DISTINCT s.id) 
+        SELECT COUNT(DISTINCT s.id)
         FROM tablet_eligible_students s
         JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
         WHERE s.requires_livox = TRUE ${whereClause}
         AND dbi.delivery_status IN ('planejada', 'realizada', 'confirmed')
     `, values);
     const allocatedPcd = parseInt(allocatedPcdRes.rows[0].count);
-    
-    // >>> CORREÇÃO 2: A PENDÊNCIA LIVOX <<<
+
     const pendingPcdRes = await pool.query(`
-        SELECT COUNT(s.id) FROM tablet_eligible_students s
+        SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s
         WHERE s.requires_livox = TRUE ${whereClause}
         AND s.id NOT IN (
-            SELECT eligible_student_id FROM delivery_batch_items 
+            SELECT eligible_student_id FROM delivery_batch_items
             WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido')
         )
     `, values);
     const pendingPcd = parseInt(pendingPcdRes.rows[0].count);
 
-    // >>> CORREÇÃO 3: ESCOLAS PENDENTES <<<
     const pendingSchoolsRes = await pool.query(`
-        SELECT u.name as school_name, COUNT(s.id) as pending_count
+        SELECT u.name as school_name, COUNT(DISTINCT s.id) as pending_count
         FROM tablet_eligible_students s
         JOIN units u ON s.school_unit_id = u.id
         WHERE s.requires_livox = TRUE ${whereClause}
         AND s.id NOT IN (
-            SELECT eligible_student_id FROM delivery_batch_items 
+            SELECT eligible_student_id FROM delivery_batch_items
             WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido')
         )
         GROUP BY u.name
@@ -4307,9 +4302,7 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
         LIMIT 5
     `, values);
 
-    // =========================================================
     // 3. O FUNIL DA OFERTA (TABLETS LIVOX NO BANCO)
-    // =========================================================
     const totalLivoxRes = await pool.query(`SELECT COUNT(*) FROM assets WHERE has_livox = TRUE AND status NOT IN ('retired', 'disposed', 'missing')`);
     const totalLivox = parseInt(totalLivoxRes.rows[0].count);
 
@@ -4317,26 +4310,28 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
     const availableLivox = parseInt(availableLivoxRes.rows[0].count);
     const allocatedLivox = totalLivox - availableLivox;
 
-    // 4. Gráficos (RPA e Ano)
+    // 4. Gráficos (RPA e Ano) — DISTINCT para exatidão
     const rpaRes = await pool.query(`
-        SELECT COALESCE(s.rpa, 'Indefinido') as name, COUNT(s.id) as total,
-        COUNT(CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed') THEN 1 END) as delivered
+        SELECT COALESCE(s.rpa, 'Indefinido') as name, COUNT(DISTINCT s.id) as total,
+        COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed') THEN s.id END) as delivered
         FROM tablet_eligible_students s
         LEFT JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
+        WHERE 1=1 ${whereClause}
         GROUP BY s.rpa ORDER BY s.rpa ASC
-    `);
+    `, values);
 
     const yearRes = await pool.query(`
-        SELECT COALESCE(s.education_year, 'N/A') as name, COUNT(s.id) as total,
-        COUNT(CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed') THEN 1 END) as delivered
+        SELECT COALESCE(s.education_year, 'N/A') as name, COUNT(DISTINCT s.id) as total,
+        COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed') THEN s.id END) as delivered
         FROM tablet_eligible_students s
         LEFT JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
+        WHERE 1=1 ${whereClause}
         GROUP BY s.education_year ORDER BY s.education_year ASC
-    `);
+    `, values);
 
     // 5. CRONOGRAMA DE LOTES
     const batchesRes = await pool.query(`
-        SELECT db.id, db.name as batch_name, u.name as school_name, COALESCE(usr.full_name, 'Usuário Removido') as created_by, db.creation_date, db.scheduled_delivery_date, db.status, (SELECT COUNT(*) FROM delivery_batch_items WHERE batch_id = db.id) as total_items, 
+        SELECT db.id, db.name as batch_name, u.name as school_name, COALESCE(usr.full_name, 'Usuário Removido') as created_by, db.creation_date, db.scheduled_delivery_date, db.status, (SELECT COUNT(*) FROM delivery_batch_items WHERE batch_id = db.id) as total_items,
         CASE WHEN db.status NOT ILIKE '%Concluído%' AND db.scheduled_delivery_date IS NOT NULL AND db.scheduled_delivery_date < CURRENT_DATE THEN true ELSE false END as is_delayed
         FROM delivery_batches db
         JOIN units u ON db.school_unit_id = u.id
@@ -4345,11 +4340,12 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
         LIMIT 50
     `);
 
+    // 6. STATUS DOS TERMOS (corrigido para mapear status NULL como 'pending')
     const termsStatusRes = await pool.query(`
-      SELECT 
-        COUNT(CASE WHEN terms_status = 'pending' AND CURRENT_DATE <= (delivery_confirmation_date + INTERVAL '14 days') THEN 1 END) as no_prazo,
-        COUNT(CASE WHEN terms_status = 'pending' AND CURRENT_DATE > (delivery_confirmation_date + INTERVAL '14 days') AND CURRENT_DATE <= (delivery_confirmation_date + INTERVAL '21 days') THEN 1 END) as atencao,
-        COUNT(CASE WHEN terms_status = 'pending' AND CURRENT_DATE > (delivery_confirmation_date + INTERVAL '21 days') THEN 1 END) as atrasado
+      SELECT
+        COUNT(CASE WHEN (terms_status IS NULL OR terms_status = 'pending') AND CURRENT_DATE <= (delivery_confirmation_date + INTERVAL '14 days') THEN 1 END) as no_prazo,
+        COUNT(CASE WHEN (terms_status IS NULL OR terms_status = 'pending') AND CURRENT_DATE > (delivery_confirmation_date + INTERVAL '14 days') AND CURRENT_DATE <= (delivery_confirmation_date + INTERVAL '21 days') THEN 1 END) as atencao,
+        COUNT(CASE WHEN (terms_status IS NULL OR terms_status = 'pending') AND CURRENT_DATE > (delivery_confirmation_date + INTERVAL '21 days') THEN 1 END) as atrasado
       FROM delivery_batches
       WHERE status = 'Concluído'
     `);
@@ -4357,19 +4353,19 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
 
     res.json({
         kpis: {
-            total, delivered, 
-            pending: pendingGeneral, 
+            total, delivered,
+            pending: pendingGeneral,
             percentage: total > 0 ? ((delivered / total) * 100).toFixed(1) : 0,
-            
-            totalPcd, allocatedPcd, pendingPcd, 
+
+            totalPcd, allocatedPcd, pendingPcd,
             totalLivox, allocatedLivox, availableLivox,
             percentagePcd: totalPcd > 0 ? ((allocatedPcd / totalPcd) * 100).toFixed(1) : 0
         },
         charts: { byRPA: rpaRes.rows, byYear: yearRes.rows },
         batches: batchesRes.rows,
-        pendingSchools: pendingSchoolsRes.rows, 
-        
-        termsStatus: { 
+        pendingSchools: pendingSchoolsRes.rows,
+
+        termsStatus: {
             no_prazo: parseInt(termsStatus.no_prazo) || 0,
             atencao: parseInt(termsStatus.atencao) || 0,
             atrasado: parseInt(termsStatus.atrasado) || 0
