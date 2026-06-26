@@ -4235,58 +4235,61 @@ app.post('/api/tablets/import-students', authenticateToken, authorizePermission(
 
 // =====================================================================
 // DADOS DO DASHBOARD (MÉTRICAS LIVOX + FILTRO RPA + ESCOLAS PENDENTES)
+// VERSÃO CORRIGIDA E INTEGRAL
 // =====================================================================
 app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission('MENU_ESCOLAR'), async (req, res) => {
   try {
     const { whereClause, values } = buildDashboardFilters(req.query);
 
-    // 1. Totais Gerais (DISTINCT para evitar duplicação por histórico de trocas)
+    // 1. Total Geral (Alunos elegíveis)
     const totalRes = await pool.query(`SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s WHERE 1=1 ${whereClause}`, values);
-    const total = parseInt(totalRes.rows[0].count);
+    const total = parseInt(totalRes.rows[0].count, 10);
 
+    // 2. Entregues (Sucesso operacional)
     const deliveredRes = await pool.query(`
         SELECT COUNT(DISTINCT s.id)
         FROM delivery_batch_items dbi
         JOIN tablet_eligible_students s ON dbi.eligible_student_id = s.id
-        WHERE dbi.delivery_status IN ('realizada', 'confirmed') ${whereClause}
+        WHERE dbi.delivery_status IN ('realizada', 'confirmed', 'substituida') ${whereClause}
     `, values);
-    const delivered = parseInt(deliveredRes.rows[0].count);
+    const delivered = parseInt(deliveredRes.rows[0].count, 10);
 
+    // 3. Pendentes (Alunos que não têm nenhuma movimentação de sucesso ou devolução)
     const pendingRes = await pool.query(`
         SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s
         WHERE 1=1 ${whereClause}
         AND s.id NOT IN (
             SELECT eligible_student_id FROM delivery_batch_items
-            WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido')
+            WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido', 'substituida')
         )
     `, values);
-    const pendingGeneral = parseInt(pendingRes.rows[0].count);
+    const pendingGeneral = parseInt(pendingRes.rows[0].count, 10);
 
-    // 2. O FUNIL DA DEMANDA PCD (ALUNOS)
+    // 4. Funil PCD
     const totalPcdRes = await pool.query(`
         SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s
         WHERE s.requires_livox = TRUE ${whereClause}
     `, values);
-    const totalPcd = parseInt(totalPcdRes.rows[0].count);
+    const totalPcd = parseInt(totalPcdRes.rows[0].count, 10);
 
     const allocatedPcdRes = await pool.query(`
         SELECT COUNT(DISTINCT s.id)
         FROM tablet_eligible_students s
         JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
         WHERE s.requires_livox = TRUE ${whereClause}
-        AND dbi.delivery_status IN ('planejada', 'realizada', 'confirmed')
+        AND dbi.delivery_status IN ('planejada', 'realizada', 'confirmed', 'substituida')
     `, values);
-    const allocatedPcd = parseInt(allocatedPcdRes.rows[0].count);
+    const allocatedPcd = parseInt(allocatedPcdRes.rows[0].count, 10);
 
     const pendingPcdRes = await pool.query(`
         SELECT COUNT(DISTINCT s.id) FROM tablet_eligible_students s
         WHERE s.requires_livox = TRUE ${whereClause}
         AND s.id NOT IN (
             SELECT eligible_student_id FROM delivery_batch_items
-            WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido')
+            WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido', 'substituida')
         )
     `, values);
-    const pendingPcd = parseInt(pendingPcdRes.rows[0].count);
+    const pendingPcd = parseInt(pendingPcdRes.rows[0].count, 10);
 
     const pendingSchoolsRes = await pool.query(`
         SELECT u.name as school_name, COUNT(DISTINCT s.id) as pending_count
@@ -4295,25 +4298,24 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
         WHERE s.requires_livox = TRUE ${whereClause}
         AND s.id NOT IN (
             SELECT eligible_student_id FROM delivery_batch_items
-            WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido')
+            WHERE delivery_status IN ('planejada', 'realizada', 'confirmed', 'devolvido', 'substituida')
         )
         GROUP BY u.name
         ORDER BY pending_count DESC
         LIMIT 5
     `, values);
 
-    // 3. O FUNIL DA OFERTA (TABLETS LIVOX NO BANCO)
+    // 5. Funil de Oferta (Itens no estoque)
     const totalLivoxRes = await pool.query(`SELECT COUNT(*) FROM assets WHERE has_livox = TRUE AND status NOT IN ('retired', 'disposed', 'missing')`);
-    const totalLivox = parseInt(totalLivoxRes.rows[0].count);
-
+    const totalLivox = parseInt(totalLivoxRes.rows[0].count, 10);
     const availableLivoxRes = await pool.query(`SELECT COUNT(*) FROM assets WHERE has_livox = TRUE AND status = 'available'`);
-    const availableLivox = parseInt(availableLivoxRes.rows[0].count);
+    const availableLivox = parseInt(availableLivoxRes.rows[0].count, 10);
     const allocatedLivox = totalLivox - availableLivox;
 
-    // 4. Gráficos (RPA e Ano) — DISTINCT para exatidão
+    // 6. Gráficos (RPA e Ano)
     const rpaRes = await pool.query(`
         SELECT COALESCE(s.rpa, 'Indefinido') as name, COUNT(DISTINCT s.id) as total,
-        COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed') THEN s.id END) as delivered
+        COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed', 'substituida') THEN s.id END) as delivered
         FROM tablet_eligible_students s
         LEFT JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
         WHERE 1=1 ${whereClause}
@@ -4322,14 +4324,14 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
 
     const yearRes = await pool.query(`
         SELECT COALESCE(s.education_year, 'N/A') as name, COUNT(DISTINCT s.id) as total,
-        COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed') THEN s.id END) as delivered
+        COUNT(DISTINCT CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed', 'substituida') THEN s.id END) as delivered
         FROM tablet_eligible_students s
         LEFT JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
         WHERE 1=1 ${whereClause}
         GROUP BY s.education_year ORDER BY s.education_year ASC
     `, values);
 
-    // 5. CRONOGRAMA DE LOTES
+    // 7. Cronograma
     const batchesRes = await pool.query(`
         SELECT db.id, db.name as batch_name, u.name as school_name, COALESCE(usr.full_name, 'Usuário Removido') as created_by, db.creation_date, db.scheduled_delivery_date, db.status, (SELECT COUNT(*) FROM delivery_batch_items WHERE batch_id = db.id) as total_items,
         CASE WHEN db.status NOT ILIKE '%Concluído%' AND db.scheduled_delivery_date IS NOT NULL AND db.scheduled_delivery_date < CURRENT_DATE THEN true ELSE false END as is_delayed
@@ -4340,38 +4342,40 @@ app.get('/api/dashboard/tablets/metrics', authenticateToken, authorizePermission
         LIMIT 50
     `);
 
-    // 6. STATUS DOS TERMOS (corrigido para mapear status NULL como 'pending')
+    // 8. Termos
     const termsStatusRes = await pool.query(`
-      SELECT
+        SELECT
         COUNT(CASE WHEN (terms_status IS NULL OR terms_status = 'pending') AND CURRENT_DATE <= (delivery_confirmation_date + INTERVAL '14 days') THEN 1 END) as no_prazo,
         COUNT(CASE WHEN (terms_status IS NULL OR terms_status = 'pending') AND CURRENT_DATE > (delivery_confirmation_date + INTERVAL '14 days') AND CURRENT_DATE <= (delivery_confirmation_date + INTERVAL '21 days') THEN 1 END) as atencao,
         COUNT(CASE WHEN (terms_status IS NULL OR terms_status = 'pending') AND CURRENT_DATE > (delivery_confirmation_date + INTERVAL '21 days') THEN 1 END) as atrasado
-      FROM delivery_batches
-      WHERE status = 'Concluído'
+        FROM delivery_batches
+        WHERE status = 'Concluído'
     `);
     const termsStatus = termsStatusRes.rows[0];
 
     res.json({
         kpis: {
-            total, delivered,
+            total, 
+            delivered,
             pending: pendingGeneral,
             percentage: total > 0 ? ((delivered / total) * 100).toFixed(1) : 0,
-
-            totalPcd, allocatedPcd, pendingPcd,
-            totalLivox, allocatedLivox, availableLivox,
+            totalPcd, 
+            allocatedPcd, 
+            pendingPcd,
+            totalLivox, 
+            allocatedLivox, 
+            availableLivox,
             percentagePcd: totalPcd > 0 ? ((allocatedPcd / totalPcd) * 100).toFixed(1) : 0
         },
         charts: { byRPA: rpaRes.rows, byYear: yearRes.rows },
         batches: batchesRes.rows,
         pendingSchools: pendingSchoolsRes.rows,
-
         termsStatus: {
-            no_prazo: parseInt(termsStatus.no_prazo) || 0,
-            atencao: parseInt(termsStatus.atencao) || 0,
-            atrasado: parseInt(termsStatus.atrasado) || 0
+            no_prazo: parseInt(termsStatus.no_prazo, 10) || 0,
+            atencao: parseInt(termsStatus.atencao, 10) || 0,
+            atrasado: parseInt(termsStatus.atrasado, 10) || 0
         }
     });
-
   } catch (error) {
     console.error('Erro dashboard metrics:', error);
     res.status(500).json({ message: 'Erro interno.' });
@@ -12482,24 +12486,54 @@ const closeCollectionOrder = async (client, code) => {
 
 // =====================================================================
 // ANALYTICS: PAINEL EXECUTIVO (PROJEÇÃO, RUN RATE E RPAS)
-// VERSÃO DEFINITIVA (Com Tooltip de Escolas e Blindagem de Nulos)
+// VERSÃO DEFINITIVA (Com Meta Líquida e Baixas Calculadas)
 // =====================================================================
 app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) => {
     try {
         const client = await pool.connect();
         
         try {
-            // 1. Meta e Realizado
-            const metaRes = await client.query('SELECT COUNT(*) as count FROM tablet_eligible_students');
-            const totalMeta = parseInt(metaRes.rows[0].count, 10);
+            // 1. A QUERY MESTRA: Status Líquido dos Alunos (A base de tudo)
+            const masterQuery = `
+                WITH StudentStatus AS (
+                    SELECT 
+                        s.id AS student_id,
+                        MAX(CASE WHEN dbi.delivery_status IN ('realizada', 'confirmed') THEN 1 ELSE 0 END) AS has_delivered,
+                        MAX(CASE WHEN dbi.delivery_status = 'devolvido' THEN 1 ELSE 0 END) AS has_returned,
+                        MAX(CASE WHEN dbi.delivery_status = 'planejada' THEN 1 ELSE 0 END) AS has_planned
+                    FROM tablet_eligible_students s
+                    LEFT JOIN delivery_batch_items dbi ON s.id = dbi.eligible_student_id
+                    GROUP BY s.id
+                ),
+                ClassifiedStudents AS (
+                    SELECT
+                        student_id,
+                        CASE 
+                            WHEN has_delivered = 1 THEN 'ENTREGUE'
+                            WHEN has_delivered = 0 AND has_returned = 1 THEN 'CANCELADO'
+                            ELSE 'PENDENTE'
+                        END AS status_final
+                    FROM StudentStatus
+                )
+                SELECT 
+                    COUNT(*) AS censo_bruto,
+                    COUNT(CASE WHEN status_final = 'ENTREGUE' THEN 1 END) AS total_entregue,
+                    COUNT(CASE WHEN status_final = 'CANCELADO' THEN 1 END) AS total_cancelado,
+                    COUNT(CASE WHEN status_final = 'PENDENTE' THEN 1 END) AS total_pendente
+                FROM ClassifiedStudents;
+            `;
+            
+            const masterRes = await client.query(masterQuery);
+            const masterStats = masterRes.rows[0];
 
-            const deliveredRes = await client.query(`
-                SELECT COUNT(*) as count FROM delivery_batch_items 
-                WHERE delivery_status IN ('realizada', 'confirmed')
-            `);
-            const totalDelivered = parseInt(deliveredRes.rows[0].count, 10);
+            const totalDelivered = parseInt(masterStats.total_entregue, 10);
+            const totalCancelado = parseInt(masterStats.total_cancelado, 10);
+            
+            // A META REAL é o Censo Bruto menos os alunos que não precisam mais do tablet (evasão/baixa)
+            const totalMeta = parseInt(masterStats.censo_bruto, 10) - totalCancelado;
+            const remaining = totalMeta - totalDelivered;
 
-            // 2. Estoque
+            // 2. Estoque (Permanece igual)
             const stockRes = await client.query(`
                 SELECT COUNT(a.id) as count FROM assets a
                 JOIN item_types it ON a.item_type_id = it.id
@@ -12508,7 +12542,7 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
             `);
             const availableStock = parseInt(stockRes.rows[0].count, 10);
 
-            // 3. Histórico Semanal
+            // 3. Histórico Semanal (Permanece igual)
             const weeklyRes = await client.query(`
                 SELECT 
                     DATE_TRUNC('week', delivery_date) as week_start,
@@ -12545,12 +12579,24 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
             }
 
             // 5. Projeção e Burn-up
-            const remaining = totalMeta - totalDelivered;
             const targetDate = new Date('2026-05-31T23:59:59Z');
-            
             let projectedDate = null; 
 
-            if (dailyVelocity > 0 && remaining > 0) {
+            // >>> CORREÇÃO: SE TERMINOU, CONGELA A DATA DE CONCLUSÃO <<<
+            if (remaining <= 0) {
+                // Se já concluímos, a data de projeção é a data da última entrega real.
+                const lastDeliveryRes = await client.query(`
+                    SELECT MAX(delivery_date) as last_date 
+                    FROM delivery_batch_items 
+                    WHERE delivery_status IN ('realizada', 'confirmed')
+                `);
+                if (lastDeliveryRes.rows.length > 0 && lastDeliveryRes.rows[0].last_date) {
+                    projectedDate = new Date(lastDeliveryRes.rows[0].last_date);
+                } else {
+                    projectedDate = new Date(); // Fallback seguro
+                }
+            } else if (dailyVelocity > 0) {
+                // Se não terminou, calcula a projeção normalmente
                 const workingDaysNeeded = Math.ceil(remaining / dailyVelocity);
                 const calendarDaysNeeded = Math.ceil(workingDaysNeeded * (7/5));
                 projectedDate = new Date();
@@ -12582,7 +12628,7 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
                 formattedWeeklyHistory.push({ name: label, entregas: w.count });
             });
 
-            // B. PROJEÇÃO FUTURA VS ALVO
+            // B. PROJEÇÃO FUTURA VS ALVO (Só plota futuro se ainda houver meta)
             if (weeklyVelocity > 0 && remaining > 0) {
                 let futureCumulative = cumulative;
                 let futureDate = new Date(); 
@@ -12619,7 +12665,7 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
                 }
             }
 
-            // 6. Dados por RPA (Matemática Blindada + Escolas)
+            // 6. Dados por RPA
             const rpaRes = await client.query(`
                 WITH StudentStatus AS (
                     SELECT 
@@ -12637,14 +12683,12 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
                     SELECT
                         u.id AS school_unit_id,
                         COALESCE(u.rpa, '-') AS rpa,
-                        COUNT(ss.student_id) AS total_eligible,
+                        -- Elegíveis REAIS: ignora os que devolveram definitivamente
+                        SUM(CASE WHEN ss.is_returned = 0 THEN 1 ELSE 0 END) AS total_eligible,
                         SUM(ss.is_delivered) AS total_delivered,
                         SUM(ss.is_returned) AS total_returned,
                         SUM(ss.is_planned) AS total_planned,
-                        -- >>> A MÁGICA DA CORREÇÃO <<<
-                        -- No Painel Executivo, quem está "Planejado (No Lote)" AINDA É FILA/PENDENTE!
-                        -- Só abatemos quem recebeu (delivered) ou quem não precisa mais (returned).
-                        (COUNT(ss.student_id) - SUM(ss.is_delivered) - SUM(ss.is_returned)) AS total_pending
+                        (SUM(CASE WHEN ss.is_returned = 0 THEN 1 ELSE 0 END) - SUM(ss.is_delivered)) AS total_pending
                     FROM units u
                     JOIN StudentStatus ss ON u.id = ss.school_unit_id
                     GROUP BY u.id, u.rpa
@@ -12657,7 +12701,6 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
                     SUM(total_planned) as planned,
                     SUM(total_pending) as pending,
                     COUNT(school_unit_id) as total_schools,
-                    -- A escola só é "Atendida" se não houver mais fila (pending <= 0)
                     COUNT(CASE WHEN total_pending <= 0 THEN 1 END) as served_schools
                 FROM SchoolStatus
                 GROUP BY rpa 
@@ -12672,7 +12715,6 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
                 return {
                     name: r.rpa === '-' ? 'Sem RPA' : (String(r.rpa).toUpperCase().includes('RPA') ? r.rpa : `RPA ${r.rpa}`),
                     entregues: entregues,
-                    // O Front-end lê 'pendentes' para desenhar a Fila
                     pendentes: Math.max(0, pendentes),
                     total: total,
                     escolas_atendidas: parseInt(r.served_schools, 10) || 0,
@@ -12680,16 +12722,24 @@ app.get('/api/analytics/tablet-projection', authenticateToken, async (req, res) 
                 };
             });
 
-            // <<< ESSE ERA O COMANDO QUE HAVIA SIDO APAGADO! >>>
+            const metaDate = new Date('2026-05-31T23:59:59Z');
+            // Data real considerada é a data atual (já que o projeto foi concluído)
+            const realDate = new Date(); 
+            // Calcula diferença em dias
+            const diffInTime = realDate.getTime() - metaDate.getTime();
+            const diffInDays = Math.max(0, Math.ceil(diffInTime / (1000 * 3600 * 24)));
+
             res.json({
                 totalMeta,
                 totalDelivered,
-                remaining,
+                remaining: Math.max(0, remaining), // Nunca será negativo
                 availableStock,
                 velocity: dailyVelocity,
                 weeklyVelocity,
                 projectedDate: projectedDate ? projectedDate.toISOString() : null,
                 targetDeadline: '2026-05-31T23:59:59Z', 
+                delayDays: diffInDays, 
+                isLate: realDate > metaDate,
                 chartData,
                 weeklyHistory: formattedWeeklyHistory,
                 rpaData

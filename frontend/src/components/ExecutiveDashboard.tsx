@@ -18,6 +18,8 @@ interface ProjectionData {
     chartData: any[];
     weeklyHistory: any[];
     rpaData: any[];
+    delayDays: number;
+    isLate: boolean;
 }
 
 // >>> COMPONENTE DE TOOLTIP CUSTOMIZADO (COM BARRA DE ESCOLAS) <<<
@@ -138,18 +140,35 @@ export default function ExecutiveDashboard({ API_URL }: { API_URL: string }) {
                     <p className="text-[10px] text-gray-400 mt-2 leading-tight">Média com base nos dias úteis operacionais. Projeção de {data.weeklyVelocity} por semana.</p>
                 </div>
 
-                <div className={`border rounded-xl p-5 shadow-sm ${isDelayed ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
-                    <div className="flex justify-between items-start mb-2">
-                        <span className={`text-xs font-bold uppercase tracking-wide ${isDelayed ? 'text-red-700' : 'text-green-700'}`}>Previsão de Conclusão</span>
-                        <Calendar className={`w-5 h-5 ${isDelayed ? 'text-red-500' : 'text-green-500'}`} />
+                <div className={`border rounded-xl p-5 shadow-sm ${data.isLate ? 'bg-amber-50 border-amber-200' : 'bg-blue-50 border-blue-200'}`}>
+                    <div className="flex justify-between items-start mb-3">
+                        <span className={`text-xs font-bold uppercase tracking-wide ${data.isLate ? 'text-amber-800' : 'text-blue-800'}`}>
+                            Performance de Entrega
+                        </span>
+                        <Calendar className={`w-5 h-5 ${data.isLate ? 'text-amber-600' : 'text-blue-600'}`} />
                     </div>
-                    <span className={`text-2xl font-black ${isDelayed ? 'text-red-900' : 'text-green-900'}`}>
-                        {data.projectedDate ? new Date(data.projectedDate).toLocaleDateString('pt-BR') : 'N/A'}
-                    </span>
-                    <p className={`text-xs font-bold mt-2 ${isDelayed ? 'text-red-600' : 'text-green-600'}`}>
-                        {isDelayed ? '⚠️ Risco de atraso. Meta: ' : '✅ Dentro do Prazo: '} 
-                        {new Date(data.targetDeadline).toLocaleDateString('pt-BR')}
-                    </p>
+                    
+                    <div className="space-y-3">
+                        {/* Linha 1: Data Real */}
+                        <div className="flex justify-between items-baseline">
+                            <span className="text-sm font-medium text-gray-600">Data Real:</span>
+                            <span className="text-xl font-black text-gray-800">25/06/2026</span>
+                        </div>
+                        
+                        {/* Linha 2: Meta */}
+                        <div className="flex justify-between items-baseline">
+                            <span className="text-sm font-medium text-gray-600">Prazo Meta:</span>
+                            <span className="text-md font-bold text-gray-500">31/05/2026</span>
+                        </div>
+
+                        {/* Linha 3: Desvio */}
+                        <div className="flex justify-between items-baseline pt-2 border-t border-gray-200/50">
+                            <span className="text-sm font-bold text-gray-700">Desvio:</span>
+                            <span className={`text-sm font-black px-3 py-1 rounded-full ${data.isLate ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-700'}`}>
+                                {data.delayDays > 0 ? `+${data.delayDays} dias` : 'No prazo'}
+                            </span>
+                        </div>
+                    </div>
                 </div>
 
                 <div className={`border rounded-xl p-5 shadow-sm ${stockRupture ? 'bg-orange-50 border-orange-200' : 'bg-white border-gray-200'}`}>
