@@ -119,6 +119,9 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 
 	const [items, setItems] = useState<ConfirmedItem[]>([]);
 
+	// ── Número do chamado para avaria via e-mail ──────────────────────────
+	const [avariaChomadoNumber, setAvariaChomadoNumber] = useState('');
+
 	// ── Ofício ────────────────────────────────────────────────────────────
 	const [oficioFile, setOficioFile] = useState<File | null>(null);
 
@@ -154,11 +157,13 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 	useEffect(() => {
 		setInputChannel('');
 		setChannelDetails('');
+		setAvariaChomadoNumber('');
 	}, [type, fundamentacao]);
 
 	useEffect(() => {
 		setChannelDetails('');
 		setEmailPrefilled(false);
+		setAvariaChomadoNumber('');
 	}, [inputChannel]);
 
 	// Pré-preenchimento automático quando canal = e-mail e endereço bate com cadastro
@@ -377,13 +382,19 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 			);
 			return;
 		}
+		const chamadoParaAvaria =
+			inputChannel === 'email' ? avariaChomadoNumber : channelDetails;
+		if (fundamentacao === 'avaria' && !chamadoParaAvaria.trim()) {
+			addToast('Informe o número do chamado para substituição por avaria.', 'error');
+			return;
+		}
 		if (items.length === 0) {
 			addToast('Adicione ao menos um item de equipamento.', 'error');
 			return;
 		}
 		if (!oficioFile) {
 			addToast(
-				'Anexe o ofício da solicitação (PDF obrigatório).',
+				`Anexe o ${documentoLabel.toLowerCase()} da solicitação (PDF obrigatório).`,
 				'error',
 			);
 			return;
@@ -394,8 +405,12 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 		formData.append('input_channel', inputChannel);
 		formData.append('requester_person_id', String(selectedPerson.id));
 		formData.append('unit_id', String(selectedUnitId));
-		if (channelDetails.trim())
-			formData.append('input_channel_details', channelDetails.trim());
+		const detailsToSend =
+			fundamentacao === 'avaria' && inputChannel === 'email'
+				? avariaChomadoNumber.trim()
+				: channelDetails.trim();
+		if (detailsToSend)
+			formData.append('input_channel_details', detailsToSend);
 		if (fundamentacao) formData.append('fundamentacao', fundamentacao);
 		if (notes.trim()) formData.append('notes', notes.trim());
 		formData.append(
@@ -427,6 +442,7 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 	};
 
 	const channelOptions = getChannelOptions(type, fundamentacao);
+	const documentoLabel = fundamentacao === 'avaria' ? 'Laudo' : 'Ofício';
 
 	// ─── Render ───────────────────────────────────────────────────────────────
 	return (
@@ -563,15 +579,26 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 									/>
 								)}
 								{inputChannel === 'email' && (
-									<input
-										type="text"
-										placeholder="Endereço de e-mail do solicitante"
-										value={channelDetails}
-										onChange={(e) =>
-											setChannelDetails(e.target.value)
-										}
-										className="mt-2 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
-									/>
+									<div className="mt-2 space-y-2">
+										<input
+											type="text"
+											placeholder="Endereço de e-mail do solicitante"
+											value={channelDetails}
+											onChange={(e) =>
+												setChannelDetails(e.target.value)
+											}
+											className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
+										/>
+										{fundamentacao === 'avaria' && (
+											<input
+												type="text"
+												placeholder="Número do chamado (obrigatório para avaria)"
+												value={avariaChomadoNumber}
+												onChange={(e) => setAvariaChomadoNumber(e.target.value)}
+												className="w-full px-3 py-2 text-sm border border-orange-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-300 bg-orange-50"
+											/>
+										)}
+									</div>
 								)}
 							</div>
 						)}
@@ -978,12 +1005,12 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 							</div>
 						</div>
 
-						{/* ── Ofício ────────────────────────────────────────────────────── */}
+						{/* ── Ofício / Laudo ────────────────────────────────────────────── */}
 						<div className="rounded-xl p-4 border-2 border-amber-300 bg-amber-50 space-y-2">
 							<div className="flex items-center gap-2">
 								<Paperclip size={15} className="text-amber-700" />
 								<label className="text-sm font-semibold text-amber-900">
-									Ofício{' '}
+									{documentoLabel}{' '}
 									<span className="font-normal text-amber-700 text-xs">
 										(PDF, JPG ou PNG — obrigatório)
 									</span>

@@ -116,9 +116,6 @@ async function createRequest(pool, data, currentUserId, oficioPath, oficioOrigin
   // Validações específicas por tipo
   if (data.type === 'substituicao') {
     if (!data.fundamentacao) throw new Error('Fundamentação é obrigatória para substituições.')
-    if (data.fundamentacao === 'avaria' && data.input_channel !== 'chamado') {
-      throw new Error('Substituição por avaria deve usar canal "chamado".')
-    }
     if (data.fundamentacao === 'necessidade_operacional' && data.input_channel === 'chamado') {
       throw new Error('Canal "chamado" é exclusivo para substituições por avaria.')
     }
@@ -129,6 +126,9 @@ async function createRequest(pool, data, currentUserId, oficioPath, oficioOrigin
   }
   if (data.input_channel === 'chamado' && !data.input_channel_details) {
     throw new Error('Número do chamado é obrigatório.')
+  }
+  if (data.fundamentacao === 'avaria' && !data.input_channel_details?.trim()) {
+    throw new Error('O número do chamado é obrigatório para substituição por avaria.')
   }
 
   // Itens do catálogo — obrigatório ao menos um
