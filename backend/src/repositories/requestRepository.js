@@ -63,7 +63,7 @@ async function findById(pool, id) {
                   'motivo',        de.motivo,
                   'changed_by_name', ude.full_name,
                   'changed_at',    de.changed_at
-                ) ORDER BY de.changed_at ASC
+                ) ORDER BY de.changed_at ASC)
                FROM dit_eventos de
                LEFT JOIN users ude ON ude.id = de.changed_by
                WHERE de.request_id = r.id),
