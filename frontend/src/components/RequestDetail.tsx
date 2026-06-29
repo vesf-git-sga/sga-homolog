@@ -42,7 +42,7 @@ const TRANSITION_LABELS: Record<string, string> = {
 	reprovado: 'Reprovar',
 	em_execucao: 'Marcar em Execução',
 	concluido: 'Concluir',
-	cancelado: 'Cancelar',
+	cancelado: 'Cancelar Solicitação',
 	indisponivel_estoque: 'Marcar Indisponível no Estoque',
 };
 
@@ -656,7 +656,7 @@ const RequestDetail = ({
 														<Calendar size={13} className="shrink-0" />
 														<span>
 															Previsto para{' '}
-															{new Date(request.dit_previsao_at + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+															{new Date(String(request.dit_previsao_at).slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
 														</span>
 														{(request.dit_eventos?.filter(e => e.tipo === 'reagendamento').length ?? 0) > 0 && (
 															<span className="ml-1 px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold">
@@ -1627,9 +1627,9 @@ const RequestDetail = ({
 															<p className="font-semibold text-orange-700">Reagendamento</p>
 															<p className="text-gray-600">
 																De{' '}
-																<span className="font-medium">{ev.data_anterior ? new Date(ev.data_anterior + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+																<span className="font-medium">{ev.data_anterior ? new Date(String(ev.data_anterior).slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
 																{' → '}
-																<span className="font-medium">{ev.nova_data ? new Date(ev.nova_data + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+																<span className="font-medium">{ev.nova_data ? new Date(String(ev.nova_data).slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
 															</p>
 															{ev.motivo && <p className="text-gray-500 italic">"{ev.motivo}"</p>}
 														</>
@@ -1792,66 +1792,64 @@ const RequestDetail = ({
 												</button>
 											</div>
 										</div>
-									:	<div className="flex gap-2 flex-wrap">
+									:	<div className="flex gap-2 flex-wrap items-start">
 									{request.status === 'aprovado' && !request.dit_ciente_at &&
 										['operator', 'manager', 'admin'].includes(currentUserRole) && (
-											<div className="w-full">
-												{!showDitForm ? (
-													<button
-														onClick={() => setShowDitForm(true)}
-														disabled={isActing}
-														className="px-4 py-2 text-sm rounded-lg font-medium transition-colors bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
-													>
-														<CheckCheck size={14} className="inline mr-1.5" />
-														Marcar DIT Ciente
-													</button>
-												) : (
-													<div className="border border-amber-300 bg-amber-50 rounded-xl p-4 space-y-3">
-														<p className="text-sm font-semibold text-amber-900">Registrar Ciência da DIT</p>
-														<div>
-															<p className="text-xs font-medium text-gray-600 mb-1.5">Modalidade</p>
-															<div className="flex gap-2">
-																{(['entrega', 'retirada'] as const).map(m => (
-																	<button
-																		key={m}
-																		type="button"
-																		onClick={() => setDitModalidade(m)}
-																		className={`flex-1 py-1.5 text-sm rounded-lg border-2 font-medium transition-colors ${ditModalidade === m ? 'border-amber-500 bg-amber-100 text-amber-800' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
-																	>
-																		{m === 'entrega' ? 'Entrega na unidade' : 'Retirada pelo solicitante'}
-																	</button>
-																))}
-															</div>
-														</div>
-														<div>
-															<label className="text-xs font-medium text-gray-600 mb-1 block">Data prevista de realização</label>
-															<input
-																type="date"
-																value={ditPrevisao}
-																onChange={e => setDitPrevisao(e.target.value)}
-																className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300"
-															/>
-														</div>
-														<div className="flex gap-2 justify-end">
-															<button
-																type="button"
-																onClick={() => { setShowDitForm(false); setDitModalidade(''); setDitPrevisao(''); }}
-																className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
-															>
-																Cancelar
-															</button>
-															<button
-																type="button"
-																onClick={handleDitCiente}
-																disabled={isActing}
-																className="px-4 py-1.5 text-sm bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-medium disabled:opacity-50"
-															>
-																{isActing ? 'Aguarde…' : 'Confirmar'}
-															</button>
+											showDitForm ? (
+												<div className="w-full border border-amber-300 bg-amber-50 rounded-xl p-4 space-y-3">
+													<p className="text-sm font-semibold text-amber-900">Registrar Ciência da DIT</p>
+													<div>
+														<p className="text-xs font-medium text-gray-600 mb-1.5">Modalidade</p>
+														<div className="flex gap-2">
+															{(['entrega', 'retirada'] as const).map(m => (
+																<button
+																	key={m}
+																	type="button"
+																	onClick={() => setDitModalidade(m)}
+																	className={`flex-1 py-1.5 text-sm rounded-lg border-2 font-medium transition-colors ${ditModalidade === m ? 'border-amber-500 bg-amber-100 text-amber-800' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
+																>
+																	{m === 'entrega' ? 'Entrega na unidade' : 'Retirada pelo solicitante'}
+																</button>
+															))}
 														</div>
 													</div>
-												)}
-											</div>
+													<div>
+														<label className="text-xs font-medium text-gray-600 mb-1 block">Data prevista de realização</label>
+														<input
+															type="date"
+															value={ditPrevisao}
+															onChange={e => setDitPrevisao(e.target.value)}
+															className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300"
+														/>
+													</div>
+													<div className="flex gap-2 justify-end">
+														<button
+															type="button"
+															onClick={() => { setShowDitForm(false); setDitModalidade(''); setDitPrevisao(''); }}
+															className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+														>
+															Cancelar
+														</button>
+														<button
+															type="button"
+															onClick={handleDitCiente}
+															disabled={isActing}
+															className="px-4 py-1.5 text-sm bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-medium disabled:opacity-50"
+														>
+															{isActing ? 'Aguarde…' : 'Confirmar'}
+														</button>
+													</div>
+												</div>
+											) : (
+												<button
+													onClick={() => setShowDitForm(true)}
+													disabled={isActing}
+													className="px-4 py-2 text-sm rounded-lg font-medium transition-colors bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
+												>
+													<CheckCheck size={14} className="inline mr-1.5" />
+													Marcar DIT Ciente
+												</button>
+											)
 										)}
 									{request.allowed_transitions.map(
 											(toStatus) => (
