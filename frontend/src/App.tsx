@@ -4933,6 +4933,14 @@ const MovementModal = ({
 			}
 			if (data.input_channel_details)
 				setRequestChannelDetails(data.input_channel_details);
+			// Auto-preenche tipo de movimentação
+			const REQUEST_TYPE_TO_MOVEMENT: Record<string, string> = {
+				emprestimo:   'loan',
+				acrescimo:    'exit',
+				substituicao: 'exit',
+			};
+			if (REQUEST_TYPE_TO_MOVEMENT[data.type])
+				setMovementType(REQUEST_TYPE_TO_MOVEMENT[data.type] as any);
 		} catch (err: any) {
 			setRequestPrefillError(
 				err.response?.status === 404 ?
