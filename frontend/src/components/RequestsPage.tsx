@@ -34,6 +34,42 @@ const KpiCard = ({
   </button>
 )
 
+// ─── DIT KPI Card (dois sub-contadores) ───────────────────────────────────────
+const DitKpiCard = ({
+  countPendente, countAgendado, activeSub, onClickPendente, onClickAgendado,
+}: {
+  countPendente: number; countAgendado: number
+  activeSub: 'pendente_dit' | 'dit_agendado' | null
+  onClickPendente: () => void; onClickAgendado: () => void
+}) => (
+  <div className={`flex flex-col w-full bg-white rounded-2xl shadow-sm border-2 transition-all overflow-hidden hover:shadow-md ${activeSub ? 'border-amber-400' : 'border-transparent'}`}>
+    <div className="px-4 pt-3 pb-1 flex items-center justify-between">
+      <p className="text-xs font-semibold text-gray-400 tracking-widest uppercase">Painel DIT</p>
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-amber-50">
+        <ClipboardCheck size={18} className="text-amber-600" />
+      </div>
+    </div>
+    <div className="flex divide-x divide-gray-100 border-t border-gray-100 mt-1">
+      <button
+        type="button"
+        onClick={onClickPendente}
+        className={`flex-1 flex flex-col items-center py-2.5 transition-colors ${activeSub === 'pendente_dit' ? 'bg-amber-50' : 'hover:bg-gray-50'}`}
+      >
+        <span className={`text-2xl font-bold ${activeSub === 'pendente_dit' ? 'text-amber-600' : 'text-amber-500'}`}>{countPendente}</span>
+        <span className="text-[10px] text-gray-400 font-medium mt-0.5 leading-tight text-center">Pend. ciência</span>
+      </button>
+      <button
+        type="button"
+        onClick={onClickAgendado}
+        className={`flex-1 flex flex-col items-center py-2.5 transition-colors ${activeSub === 'dit_agendado' ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+      >
+        <span className={`text-2xl font-bold ${activeSub === 'dit_agendado' ? 'text-blue-600' : 'text-blue-500'}`}>{countAgendado}</span>
+        <span className="text-[10px] text-gray-400 font-medium mt-0.5 leading-tight text-center">Agendadas</span>
+      </button>
+    </div>
+  </div>
+)
+
 // ─── Componente principal ──────────────────────────────────────────────────────
 interface RequestsPageProps {
   currentUserRole: string
@@ -83,6 +119,7 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
   const kpiConcluidas   = useMemo(() => requests.filter(r => r.status === 'concluido').length, [requests])
   const kpiVisitas      = useMemo(() => requests.filter(r => r.status === 'visita_tecnica_solicitada').length, [requests])
   const kpiPendenteDIT  = useMemo(() => requests.filter(r => r.status === 'aprovado' && !r.dit_ciente_at).length, [requests])
+  const kpiDitAgendado  = useMemo(() => requests.filter(r => r.status === 'aprovado' && !!r.dit_ciente_at).length, [requests])
   const kpiIndisponivel = useMemo(() => requests.filter(r => r.status === 'indisponivel_estoque').length, [requests])
 
   // ─── Filtros ───────────────────────────────────────────────────────────────
@@ -94,6 +131,7 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
     if (activeKpi === 'aprovadas')    list = list.filter(r => r.status === 'aprovado')
     if (activeKpi === 'concluidas')   list = list.filter(r => r.status === 'concluido')
     if (activeKpi === 'pendente_dit') list = list.filter(r => r.status === 'aprovado' && !r.dit_ciente_at)
+    if (activeKpi === 'dit_agendado') list = list.filter(r => r.status === 'aprovado' && !!r.dit_ciente_at)
     if (activeKpi === 'indisponivel') list = list.filter(r => r.status === 'indisponivel_estoque')
 
     if (filterStatus) list = list.filter(r => r.status === filterStatus)
@@ -165,8 +203,13 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
         <KpiCard label="Visitas Técnicas" count={kpiVisitas} icon={<MapPin size={22} className="text-purple-600" />}
           iconBg="bg-purple-50" countColor="text-purple-700"
           onClick={() => { setShowRoutePanel(prev => !prev); setShowUnavailablePanel(false) }} active={showRoutePanel} />
-        <KpiCard label="Pendente DIT" count={kpiPendenteDIT} icon={<ClipboardCheck size={22} className="text-amber-600" />}
-          iconBg="bg-amber-50" countColor="text-amber-700" onClick={() => handleKpiClick('pendente_dit')} active={activeKpi === 'pendente_dit'} />
+        <DitKpiCard
+          countPendente={kpiPendenteDIT}
+          countAgendado={kpiDitAgendado}
+          activeSub={activeKpi === 'pendente_dit' ? 'pendente_dit' : activeKpi === 'dit_agendado' ? 'dit_agendado' : null}
+          onClickPendente={() => handleKpiClick('pendente_dit')}
+          onClickAgendado={() => handleKpiClick('dit_agendado')}
+        />
         <KpiCard label="Sem Estoque" count={kpiIndisponivel} icon={<PackageX size={22} className="text-orange-600" />}
           iconBg="bg-orange-50" countColor="text-orange-700"
           onClick={() => { setShowUnavailablePanel(prev => !prev); setShowRoutePanel(false) }} active={showUnavailablePanel} />
