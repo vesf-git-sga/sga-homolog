@@ -61,6 +61,9 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
   router.patch('/requests/:id/dit-ciente', authenticateToken,
     (req, res) => controller.ackDitCiente(req, res, pool, logAudit))
 
+  router.post('/requests/:id/dit-evento', authenticateToken,
+    (req, res) => controller.registrarEventoDit(req, res, pool, logAudit))
+
   router.get('/requests/movement-prefill', authenticateToken,
     authorizePermission('ACTION_REGISTER_MOVEMENT'),
     (req, res) => controller.getMovementPrefill(req, res, pool))

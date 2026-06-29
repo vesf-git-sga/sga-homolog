@@ -51,7 +51,24 @@ async function findById(pool, id) {
             u.rpa        AS unit_rpa,
             uc.full_name AS created_by_name,
             ua.full_name AS approved_by_name,
-            ud.full_name AS dit_ciente_by_name
+            ud.full_name AS dit_ciente_by_name,
+            COALESCE(
+              (SELECT json_agg(
+                json_build_object(
+                  'id',            de.id,
+                  'tipo',          de.tipo,
+                  'modalidade',    de.modalidade,
+                  'data_anterior', de.data_anterior,
+                  'nova_data',     de.nova_data,
+                  'motivo',        de.motivo,
+                  'changed_by_name', ude.full_name,
+                  'changed_at',    de.changed_at
+                ) ORDER BY de.changed_at ASC)
+               FROM dit_eventos de
+               LEFT JOIN users ude ON ude.id = de.changed_by
+               WHERE de.request_id = r.id),
+              '[]'::json
+            ) AS dit_eventos
      FROM requests r
      LEFT JOIN people  p  ON p.id = r.requester_person_id
      LEFT JOIN units   u  ON u.id = r.unit_id
@@ -414,20 +431,87 @@ async function findRequestsForVisitRoute(pool) {
 
 // ─── Ciência da DIT ──────────────────────────────────────────────────────────
 
-async function markDitCiente(pool, requestId, userId) {
-  await pool.query(
-    `UPDATE requests
-     SET dit_ciente_at = NOW(), dit_ciente_by = $1, updated_at = NOW()
-     WHERE id = $2`,
-    [userId, requestId]
-  )
-  await pool.query(
-    `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
-     SELECT id, status, status, 'DIT ciente. Ciência registrada.', $1
-     FROM requests WHERE id = $2`,
-    [userId, requestId]
-  )
-  return findById(pool, requestId)
+async function markDitCiente(pool, requestId, userId, modalidade, previsaoAt) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `UPDATE requests
+       SET dit_ciente_at = NOW(), dit_ciente_by = $1,
+           dit_modalidade = $3, dit_previsao_at = $4,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [userId, requestId, modalidade, previsaoAt]
+    )
+    const previsaoFormatted = new Date(previsaoAt).toLocaleDateString('pt-BR')
+    const modalidadeLabel = modalidade === 'entrega' ? 'Entrega na unidade' : 'Retirada pelo solicitante'
+    await client.query(
+      `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+       SELECT id, status, status, $3, $1
+       FROM requests WHERE id = $2`,
+      [userId, requestId, `DIT ciente. Modalidade: ${modalidadeLabel}. Previsão: ${previsaoFormatted}.`]
+    )
+    await client.query(
+      `INSERT INTO dit_eventos (request_id, tipo, modalidade, changed_by)
+       VALUES ($1, 'ciente', $2, $3)`,
+      [requestId, modalidade, userId]
+    )
+    await client.query('COMMIT')
+    return findById(pool, requestId)
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+async function criarEventoDit(pool, requestId, userId, tipo, dados) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    if (tipo === 'reagendamento') {
+      const cur = await client.query(
+        'SELECT dit_previsao_at, status FROM requests WHERE id = $1 FOR UPDATE',
+        [requestId]
+      )
+      const dataAnterior = cur.rows[0]?.dit_previsao_at || null
+      await client.query(
+        `INSERT INTO dit_eventos (request_id, tipo, data_anterior, nova_data, motivo, changed_by)
+         VALUES ($1, 'reagendamento', $2, $3, $4, $5)`,
+        [requestId, dataAnterior, dados.nova_data, dados.motivo, userId]
+      )
+      await client.query(
+        `UPDATE requests SET dit_previsao_at = $1, updated_at = NOW() WHERE id = $2`,
+        [dados.nova_data, requestId]
+      )
+      const anterior = dataAnterior
+        ? new Date(dataAnterior).toLocaleDateString('pt-BR')
+        : 'não definida'
+      const nova = new Date(dados.nova_data).toLocaleDateString('pt-BR')
+      await client.query(
+        `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+         SELECT id, status, status, $3, $1
+         FROM requests WHERE id = $2`,
+        [userId, requestId, `DIT reagendou de ${anterior} para ${nova}. Motivo: ${dados.motivo}`]
+      )
+    } else if (tipo === 'observacao') {
+      await client.query(
+        `INSERT INTO dit_eventos (request_id, tipo, motivo, changed_by)
+         VALUES ($1, 'observacao', $2, $3)`,
+        [requestId, dados.motivo, userId]
+      )
+    }
+
+    await client.query('COMMIT')
+    return findById(pool, requestId)
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
 }
 
 // ─── Fila de indisponíveis no estoque ────────────────────────────────────────
@@ -491,5 +575,6 @@ module.exports = {
   findRequestForMovementPrefill,
   findRequestsForVisitRoute,
   markDitCiente,
+  criarEventoDit,
   findUnavailableQueue,
 }

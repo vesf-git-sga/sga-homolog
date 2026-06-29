@@ -15,6 +15,7 @@ import {
   ItemType,
   VisitRouteEntry,
   UnavailableQueueEntry,
+  DitEvento,
 } from '../types/requests'
 
 let API_URL = process.env.REACT_APP_API_URL || `http://${window.location.hostname}:5000/api`
@@ -136,8 +137,11 @@ export const requestsApi = {
   getVisitRoute: () =>
     axios.get<VisitRouteEntry[]>(`${API_URL}/requests/visit-route`).then(r => r.data),
 
-  ackDitCiente: (id: number) =>
-    axios.patch<EquipmentRequest>(`${API_URL}/requests/${id}/dit-ciente`).then(r => r.data),
+  ackDitCiente: (id: number, body: { modalidade: string; previsao_at: string }) =>
+    axios.patch<EquipmentRequest>(`${API_URL}/requests/${id}/dit-ciente`, body).then(r => r.data),
+
+  registrarEventoDit: (id: number, body: { tipo: string; nova_data?: string; motivo?: string }) =>
+    axios.post<EquipmentRequest>(`${API_URL}/requests/${id}/dit-evento`, body).then(r => r.data),
 
   getUnavailableQueue: () =>
     axios.get<UnavailableQueueEntry[]>(`${API_URL}/requests/unavailable-queue`).then(r => r.data),

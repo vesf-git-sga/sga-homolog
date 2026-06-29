@@ -350,7 +350,7 @@ async function getMovementPrefill(pool, protocol) {
 
 // ─── Ciência da DIT ───────────────────────────────────────────────────────────
 
-async function ditCiente(pool, requestId, currentUser) {
+async function ditCiente(pool, requestId, currentUser, modalidade, previsaoAt) {
   const request = await repository.findById(pool, requestId)
   if (!request) throw new Error('Solicitação não encontrada.')
   if (request.status !== 'aprovado') {
@@ -363,7 +363,44 @@ async function ditCiente(pool, requestId, currentUser) {
   if (!allowed.includes(currentUser.role)) {
     throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para registrar ciência da DIT.`)
   }
-  return repository.markDitCiente(pool, requestId, currentUser.id)
+  if (!modalidade || !['entrega', 'retirada'].includes(modalidade)) {
+    throw new Error('Modalidade é obrigatória: "entrega" ou "retirada".')
+  }
+  if (!previsaoAt) {
+    throw new Error('Data prevista é obrigatória.')
+  }
+  const dataPrevisao = new Date(previsaoAt)
+  if (isNaN(dataPrevisao.getTime())) {
+    throw new Error('Data prevista inválida.')
+  }
+  return repository.markDitCiente(pool, requestId, currentUser.id, modalidade, previsaoAt)
+}
+
+async function registrarEventoDit(pool, requestId, currentUser, tipo, dados) {
+  const request = await repository.findById(pool, requestId)
+  if (!request) throw new Error('Solicitação não encontrada.')
+  if (!request.dit_ciente_at) {
+    throw new Error('A DIT ainda não registrou ciência desta solicitação.')
+  }
+  if (TERMINAL_STATUSES.includes(request.status)) {
+    throw new Error('Não é possível registrar evento em solicitação com status terminal.')
+  }
+  const allowed = ['operator', 'manager', 'admin']
+  if (!allowed.includes(currentUser.role)) {
+    throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para esta ação.`)
+  }
+  if (!['reagendamento', 'observacao'].includes(tipo)) {
+    throw new Error('Tipo de evento inválido. Use "reagendamento" ou "observacao".')
+  }
+  if (tipo === 'reagendamento') {
+    if (!dados.nova_data) throw new Error('Nova data é obrigatória para reagendamento.')
+    if (isNaN(new Date(dados.nova_data).getTime())) throw new Error('Nova data inválida.')
+    if (!dados.motivo?.trim()) throw new Error('Motivo é obrigatório para reagendamento.')
+  }
+  if (tipo === 'observacao') {
+    if (!dados.motivo?.trim()) throw new Error('Observação não pode ser vazia.')
+  }
+  return repository.criarEventoDit(pool, requestId, currentUser.id, tipo, dados)
 }
 
 // ─── Fila de indisponíveis no estoque ────────────────────────────────────────
@@ -386,5 +423,6 @@ module.exports = {
   getMovementPrefill,
   getAllowedTransitions,
   ditCiente,
+  registrarEventoDit,
   getUnavailableQueue,
 }

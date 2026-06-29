@@ -196,14 +196,37 @@ async function getVisitRoute(req, res, pool) {
 async function ackDitCiente(req, res, pool, logAudit) {
   try {
     const requestId = parseInt(req.params.id)
-    const result = await service.ditCiente(pool, requestId, req.user)
-    await logAudit(req.user.id, 'request_dit_ciente', 'requests', requestId, {}, req.ip)
+    const { modalidade, previsao_at } = req.body || {}
+    const result = await service.ditCiente(pool, requestId, req.user, modalidade, previsao_at)
+    await logAudit(req.user.id, 'request_dit_ciente', 'requests', requestId,
+      { modalidade, previsao_at }, req.ip)
     res.status(200).json(result)
   } catch (err) {
     const status =
       err.message.includes('não encontrada') ? 404 :
       err.message.includes('aprovada') || err.message.includes('já registrou') ||
-      err.message.includes('permissão') ? 400 : 500
+      err.message.includes('permissão') || err.message.includes('obrigatóri') ||
+      err.message.includes('inválid') ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
+async function registrarEventoDit(req, res, pool, logAudit) {
+  try {
+    const requestId = parseInt(req.params.id)
+    const { tipo, nova_data, motivo } = req.body || {}
+    const result = await service.registrarEventoDit(
+      pool, requestId, req.user, tipo, { nova_data, motivo }
+    )
+    await logAudit(req.user.id, `request_dit_${tipo}`, 'requests', requestId,
+      { tipo, nova_data, motivo }, req.ip)
+    res.status(200).json(result)
+  } catch (err) {
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('obrigatóri') || err.message.includes('inválid') ||
+      err.message.includes('permissão') || err.message.includes('ciência') ||
+      err.message.includes('terminal') || err.message.includes('vazia') ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }
@@ -232,5 +255,6 @@ module.exports = {
   getMovementPrefill,
   getVisitRoute,
   ackDitCiente,
+  registrarEventoDit,
   getUnavailableQueue,
 }

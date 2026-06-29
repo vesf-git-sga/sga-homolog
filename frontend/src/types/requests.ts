@@ -56,6 +56,9 @@ export interface EquipmentRequest {
   dit_ciente_at?: string | null
   dit_ciente_by?: number | null
   dit_ciente_by_name?: string | null
+  dit_modalidade?: 'entrega' | 'retirada' | null
+  dit_previsao_at?: string | null
+  dit_eventos?: DitEvento[]
   created_at: string
   updated_at: string
   // carregados via getById
@@ -117,6 +120,17 @@ export interface UnavailableQueueEntry {
     model_name?: string | null
     quantity: number
   }>
+}
+
+export interface DitEvento {
+  id: number
+  tipo: 'ciente' | 'reagendamento' | 'observacao'
+  modalidade?: 'entrega' | 'retirada' | null
+  data_anterior?: string | null
+  nova_data?: string | null
+  motivo?: string | null
+  changed_by_name?: string | null
+  changed_at: string
 }
 
 export interface VisitRouteEntry {
