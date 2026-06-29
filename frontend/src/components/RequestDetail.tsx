@@ -218,6 +218,18 @@ const RequestDetail = ({
 	>('');
 	const [editVisitFindings, setEditVisitFindings] = useState('');
 
+	// DIT — form de ciência
+	const [showDitForm, setShowDitForm] = useState(false);
+	const [ditModalidade, setDitModalidade] = useState<'entrega' | 'retirada' | ''>('');
+	const [ditPrevisao, setDitPrevisao] = useState('');
+
+	// DIT — reagendamento / observação
+	const [showReagForm, setShowReagForm] = useState(false);
+	const [reagNovaData, setReagNovaData] = useState('');
+	const [reagMotivo, setReagMotivo] = useState('');
+	const [showObsForm, setShowObsForm] = useState(false);
+	const [obsMotivo, setObsMotivo] = useState('');
+
 	const loadRequest = useCallback(async () => {
 		setIsLoading(true);
 		try {
@@ -270,13 +282,53 @@ const RequestDetail = ({
 
 	const handleDitCiente = async () => {
 		if (!request) return;
+		if (!ditModalidade) {
+			addToast('Selecione a modalidade (Entrega ou Retirada).', 'error');
+			return;
+		}
+		if (!ditPrevisao) {
+			addToast('Informe a data prevista de realização.', 'error');
+			return;
+		}
 		setIsActing(true);
 		try {
-			await requestsApi.ackDitCiente(requestId);
+			await requestsApi.ackDitCiente(requestId, {
+				modalidade: ditModalidade,
+				previsao_at: ditPrevisao,
+			});
 			addToast('Ciência da DIT registrada com sucesso.', 'success');
+			setShowDitForm(false);
+			setDitModalidade('');
+			setDitPrevisao('');
 			await loadRequest();
 		} catch (err: any) {
 			addToast(err?.response?.data?.message || 'Erro ao registrar ciência da DIT.', 'error');
+		} finally {
+			setIsActing(false);
+		}
+	};
+
+	const handleRegistrarEventoDit = async (tipo: 'reagendamento' | 'observacao') => {
+		if (!request) return;
+		setIsActing(true);
+		try {
+			await requestsApi.registrarEventoDit(requestId, {
+				tipo,
+				nova_data: tipo === 'reagendamento' ? reagNovaData : undefined,
+				motivo: tipo === 'reagendamento' ? reagMotivo : obsMotivo,
+			});
+			addToast(
+				tipo === 'reagendamento' ? 'Reagendamento registrado.' : 'Observação registrada.',
+				'success',
+			);
+			setShowReagForm(false);
+			setReagNovaData('');
+			setReagMotivo('');
+			setShowObsForm(false);
+			setObsMotivo('');
+			await loadRequest();
+		} catch (err: any) {
+			addToast(err?.response?.data?.message || 'Erro ao registrar evento DIT.', 'error');
 		} finally {
 			setIsActing(false);
 		}
@@ -581,18 +633,39 @@ const RequestDetail = ({
 											</div>
 										)}
 								{(request.status === 'aprovado' || request.status === 'indisponivel_estoque') && (
-									<div className="col-span-2">
+									<div className="col-span-2 space-y-1">
 										{request.dit_ciente_at ? (
-											<div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700 font-medium">
-												<CheckCheck size={13} className="shrink-0" />
-												<span>
-													DIT ciente em{' '}
-													{new Date(request.dit_ciente_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
-													{' às '}
-													{new Date(request.dit_ciente_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-													{request.dit_ciente_by_name && ` · ${request.dit_ciente_by_name}`}
-												</span>
-											</div>
+											<>
+												<div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700 font-medium flex-wrap">
+													<CheckCheck size={13} className="shrink-0" />
+													<span>
+														DIT ciente em{' '}
+														{new Date(request.dit_ciente_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+														{' às '}
+														{new Date(request.dit_ciente_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+														{request.dit_ciente_by_name && ` · ${request.dit_ciente_by_name}`}
+													</span>
+													{request.dit_modalidade && (
+														<span className="ml-1 px-1.5 py-0.5 bg-green-100 rounded font-semibold uppercase tracking-wide">
+															{request.dit_modalidade === 'entrega' ? 'Entrega' : 'Retirada'}
+														</span>
+													)}
+												</div>
+												{request.dit_previsao_at && (
+													<div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 font-medium">
+														<Calendar size={13} className="shrink-0" />
+														<span>
+															Previsto para{' '}
+															{new Date(request.dit_previsao_at + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+														</span>
+														{(request.dit_eventos?.filter(e => e.tipo === 'reagendamento').length ?? 0) > 0 && (
+															<span className="ml-1 px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold">
+																Reagendado {request.dit_eventos!.filter(e => e.tipo === 'reagendamento').length}×
+															</span>
+														)}
+													</div>
+												)}
+											</>
 										) : (
 											<div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 font-medium">
 												<Clock size={13} className="shrink-0" />
@@ -1460,6 +1533,121 @@ const RequestDetail = ({
 											</div>
 										</div>
 									)}
+
+								{/* ── Histórico DIT ── */}
+								{request.dit_ciente_at && (
+									<div className="border border-blue-200 rounded-xl overflow-hidden">
+										<div className="bg-blue-600 px-4 py-2.5 flex items-center justify-between">
+											<span className="text-sm font-semibold text-white">Histórico DIT</span>
+											{['aprovado', 'indisponivel_estoque'].includes(request.status) &&
+												['operator', 'manager', 'admin'].includes(currentUserRole) && (
+												<div className="flex gap-2">
+													<button
+														onClick={() => { setShowReagForm(true); setShowObsForm(false); }}
+														className="text-xs px-2.5 py-1 bg-white/20 hover:bg-white/30 text-white rounded-md font-medium transition-colors"
+													>
+														Reagendar
+													</button>
+													<button
+														onClick={() => { setShowObsForm(true); setShowReagForm(false); }}
+														className="text-xs px-2.5 py-1 bg-white/20 hover:bg-white/30 text-white rounded-md font-medium transition-colors"
+													>
+														+ Observação
+													</button>
+												</div>
+											)}
+										</div>
+
+										{/* Form de reagendamento */}
+										{showReagForm && (
+											<div className="px-4 py-3 bg-orange-50 border-b border-orange-200 space-y-2">
+												<p className="text-xs font-semibold text-orange-800">Reagendar</p>
+												<div>
+													<label className="text-xs text-gray-600 mb-1 block">Nova data prevista</label>
+													<input
+														type="date"
+														value={reagNovaData}
+														onChange={e => setReagNovaData(e.target.value)}
+														className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-300"
+													/>
+												</div>
+												<div>
+													<label className="text-xs text-gray-600 mb-1 block">Motivo do reagendamento</label>
+													<textarea
+														rows={2}
+														placeholder="Descreva o motivo…"
+														value={reagMotivo}
+														onChange={e => setReagMotivo(e.target.value)}
+														className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-300 resize-none"
+													/>
+												</div>
+												<div className="flex gap-2 justify-end">
+													<button onClick={() => { setShowReagForm(false); setReagNovaData(''); setReagMotivo(''); }} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancelar</button>
+													<button onClick={() => handleRegistrarEventoDit('reagendamento')} disabled={isActing} className="text-xs px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-medium disabled:opacity-50">{isActing ? 'Aguarde…' : 'Salvar'}</button>
+												</div>
+											</div>
+										)}
+
+										{/* Form de observação */}
+										{showObsForm && (
+											<div className="px-4 py-3 bg-gray-50 border-b border-gray-200 space-y-2">
+												<p className="text-xs font-semibold text-gray-700">Nova Observação</p>
+												<textarea
+													rows={2}
+													placeholder="Digite a observação…"
+													value={obsMotivo}
+													onChange={e => setObsMotivo(e.target.value)}
+													className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
+												/>
+												<div className="flex gap-2 justify-end">
+													<button onClick={() => { setShowObsForm(false); setObsMotivo(''); }} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancelar</button>
+													<button onClick={() => handleRegistrarEventoDit('observacao')} disabled={isActing} className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium disabled:opacity-50">{isActing ? 'Aguarde…' : 'Salvar'}</button>
+												</div>
+											</div>
+										)}
+
+										{/* Lista de eventos */}
+										<div className="divide-y divide-gray-100">
+											{(request.dit_eventos ?? []).map(ev => (
+												<div key={ev.id} className="px-4 py-3 text-xs space-y-0.5">
+													{ev.tipo === 'ciente' && (
+														<>
+															<p className="font-semibold text-green-700 flex items-center gap-1">
+																<CheckCheck size={12} /> Ciência registrada
+																{ev.modalidade && (
+																	<span className="ml-1 px-1.5 py-0.5 bg-green-100 rounded font-bold uppercase">
+																		{ev.modalidade === 'entrega' ? 'Entrega' : 'Retirada'}
+																	</span>
+																)}
+															</p>
+														</>
+													)}
+													{ev.tipo === 'reagendamento' && (
+														<>
+															<p className="font-semibold text-orange-700">Reagendamento</p>
+															<p className="text-gray-600">
+																De{' '}
+																<span className="font-medium">{ev.data_anterior ? new Date(ev.data_anterior + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+																{' → '}
+																<span className="font-medium">{ev.nova_data ? new Date(ev.nova_data + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+															</p>
+															{ev.motivo && <p className="text-gray-500 italic">"{ev.motivo}"</p>}
+														</>
+													)}
+													{ev.tipo === 'observacao' && (
+														<>
+															<p className="font-semibold text-blue-700">Observação</p>
+															{ev.motivo && <p className="text-gray-600">"{ev.motivo}"</p>}
+														</>
+													)}
+													<p className="text-gray-400 mt-1">
+														{ev.changed_by_name} · {new Date(ev.changed_at).toLocaleString('pt-BR')}
+													</p>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
 								</>
 							)}
 
@@ -1607,14 +1795,63 @@ const RequestDetail = ({
 									:	<div className="flex gap-2 flex-wrap">
 									{request.status === 'aprovado' && !request.dit_ciente_at &&
 										['operator', 'manager', 'admin'].includes(currentUserRole) && (
-											<button
-												onClick={handleDitCiente}
-												disabled={isActing}
-												className="px-4 py-2 text-sm rounded-lg font-medium transition-colors bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
-											>
-												<CheckCheck size={14} className="inline mr-1.5" />
-												{isActing ? 'Aguarde…' : 'Marcar DIT Ciente'}
-											</button>
+											<div className="w-full">
+												{!showDitForm ? (
+													<button
+														onClick={() => setShowDitForm(true)}
+														disabled={isActing}
+														className="px-4 py-2 text-sm rounded-lg font-medium transition-colors bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
+													>
+														<CheckCheck size={14} className="inline mr-1.5" />
+														Marcar DIT Ciente
+													</button>
+												) : (
+													<div className="border border-amber-300 bg-amber-50 rounded-xl p-4 space-y-3">
+														<p className="text-sm font-semibold text-amber-900">Registrar Ciência da DIT</p>
+														<div>
+															<p className="text-xs font-medium text-gray-600 mb-1.5">Modalidade</p>
+															<div className="flex gap-2">
+																{(['entrega', 'retirada'] as const).map(m => (
+																	<button
+																		key={m}
+																		type="button"
+																		onClick={() => setDitModalidade(m)}
+																		className={`flex-1 py-1.5 text-sm rounded-lg border-2 font-medium transition-colors ${ditModalidade === m ? 'border-amber-500 bg-amber-100 text-amber-800' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
+																	>
+																		{m === 'entrega' ? 'Entrega na unidade' : 'Retirada pelo solicitante'}
+																	</button>
+																))}
+															</div>
+														</div>
+														<div>
+															<label className="text-xs font-medium text-gray-600 mb-1 block">Data prevista de realização</label>
+															<input
+																type="date"
+																value={ditPrevisao}
+																onChange={e => setDitPrevisao(e.target.value)}
+																className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300"
+															/>
+														</div>
+														<div className="flex gap-2 justify-end">
+															<button
+																type="button"
+																onClick={() => { setShowDitForm(false); setDitModalidade(''); setDitPrevisao(''); }}
+																className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+															>
+																Cancelar
+															</button>
+															<button
+																type="button"
+																onClick={handleDitCiente}
+																disabled={isActing}
+																className="px-4 py-1.5 text-sm bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-medium disabled:opacity-50"
+															>
+																{isActing ? 'Aguarde…' : 'Confirmar'}
+															</button>
+														</div>
+													</div>
+												)}
+											</div>
 										)}
 									{request.allowed_transitions.map(
 											(toStatus) => (
