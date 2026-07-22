@@ -2,11 +2,8 @@ import React, { useState, useEffect, useCallback, useContext } from 'react';
 import {
 	X,
 	Calendar,
-	CheckCircle,
-	XCircle,
 	Clock,
 	Truck,
-	ChevronRight,
 	ArrowRight,
 	Download,
 	AlertTriangle,
@@ -17,7 +14,6 @@ import StatusBadge from './StatusBadge';
 import { requestsApi } from '../services/requestsApi';
 import {
 	EquipmentRequest,
-	TechnicalVisit,
 	StatusHistoryEntry,
 	LinkedMovement,
 	RequestStatus,
@@ -51,6 +47,9 @@ const TRANSITION_LABELS_FROM_UNAVAILABLE: Record<string, string> = {
 };
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['cancelado', 'reprovado']);
+
+/** Ações auxiliares ficam à esquerda no rodapé; as demais (decisão) à direita. */
+const AUXILIARY_TRANSITIONS = new Set(['visita_tecnica_solicitada']);
 
 const TRANSITION_STYLES: Record<string, string> = {
 	aprovado: 'bg-green-600 hover:bg-green-700 text-white',
@@ -240,7 +239,7 @@ const RequestDetail = ({
 		} finally {
 			setIsLoading(false);
 		}
-	}, [requestId]);
+	}, [requestId, addToast]);
 
 	useEffect(() => {
 		loadRequest();
@@ -479,13 +478,47 @@ const RequestDetail = ({
 		}
 	};
 
-	const isManagerOrAdmin = ['manager', 'admin'].includes(currentUserRole);
 	const showVisitSection =
 		request != null &&
 		['requisitado', 'visita_tecnica_solicitada'].includes(request.status) &&
 		['basic', 'operator', 'manager', 'admin'].includes(currentUserRole);
+	const hasPendingVisit =
+		request?.visits?.some((v) => !v.completed_at) ?? false;
 	const canScheduleVisit =
-		showVisitSection && request?.status === 'visita_tecnica_solicitada';
+		showVisitSection &&
+		request?.status === 'visita_tecnica_solicitada' &&
+		!hasPendingVisit;
+
+	const auxiliaryTransitions = (request?.allowed_transitions ?? []).filter(
+		(toStatus) => AUXILIARY_TRANSITIONS.has(toStatus),
+	);
+	const decisionTransitions = (request?.allowed_transitions ?? []).filter(
+		(toStatus) => !AUXILIARY_TRANSITIONS.has(toStatus),
+	);
+
+	const transitionLabel = (toStatus: RequestStatus) =>
+		request?.status === 'indisponivel_estoque' &&
+		TRANSITION_LABELS_FROM_UNAVAILABLE[toStatus]
+			? TRANSITION_LABELS_FROM_UNAVAILABLE[toStatus]
+			: TRANSITION_LABELS[toStatus] ||
+				REQUEST_STATUS_LABELS[toStatus] ||
+				toStatus;
+
+	const renderTransitionButton = (toStatus: RequestStatus) => (
+		<button
+			key={toStatus}
+			onClick={() => {
+				if (DESTRUCTIVE_TRANSITIONS.has(toStatus)) {
+					setConfirmingTransition(toStatus);
+				} else {
+					handleTransition(toStatus);
+				}
+			}}
+			className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${TRANSITION_STYLES[toStatus] || 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+		>
+			{transitionLabel(toStatus)}
+		</button>
+	);
 
 	return (
 		<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -1356,11 +1389,10 @@ const RequestDetail = ({
 											</div>
 										)}
 
-									{/* Agendar visita — bloqueado antes de "Solicitar" e oculto se já há agendamento */}
+									{/* Agendar visita — bloqueado antes de "Solicitar"; oculto se já há visita pendente */}
 									{showVisitSection &&
 										!showScheduleVisit &&
-										(!request.visits ||
-											request.visits.length === 0) && (
+										!hasPendingVisit && (
 											<button
 												onClick={() =>
 													canScheduleVisit &&
@@ -1792,10 +1824,10 @@ const RequestDetail = ({
 												</button>
 											</div>
 										</div>
-									:	<div className="flex gap-2 flex-wrap items-start">
+									:	<div className="space-y-3">
 									{request.status === 'aprovado' && !request.dit_ciente_at &&
-										['operator', 'manager', 'admin'].includes(currentUserRole) && (
-											showDitForm ? (
+										['operator', 'manager', 'admin'].includes(currentUserRole) &&
+										showDitForm && (
 												<div className="w-full border border-amber-300 bg-amber-50 rounded-xl p-4 space-y-3">
 													<p className="text-sm font-semibold text-amber-900">Registrar Ciência da DIT</p>
 													<div>
@@ -1840,47 +1872,27 @@ const RequestDetail = ({
 														</button>
 													</div>
 												</div>
-											) : (
-												<button
-													onClick={() => setShowDitForm(true)}
-													disabled={isActing}
-													className="px-4 py-2 text-sm rounded-lg font-medium transition-colors bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
-												>
-													<CheckCheck size={14} className="inline mr-1.5" />
-													Marcar DIT Ciente
-												</button>
-											)
 										)}
-									{request.allowed_transitions.map(
-											(toStatus) => (
-												<button
-													key={toStatus}
-													onClick={() => {
-														if (
-															DESTRUCTIVE_TRANSITIONS.has(
-																toStatus,
-															)
-														) {
-															setConfirmingTransition(
-																toStatus,
-															);
-														} else {
-															handleTransition(
-																toStatus,
-															);
-														}
-													}}
-													className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${TRANSITION_STYLES[toStatus] || 'bg-blue-600 hover:bg-blue-700 text-white'}`}
-												>
-													{(request.status === 'indisponivel_estoque' &&
-														TRANSITION_LABELS_FROM_UNAVAILABLE[toStatus])
-														? TRANSITION_LABELS_FROM_UNAVAILABLE[toStatus]
-														: (TRANSITION_LABELS[toStatus] ||
-															REQUEST_STATUS_LABELS[toStatus] ||
-															toStatus)}
-												</button>
-											),
-										)}
+									<div className="flex flex-wrap items-center justify-between gap-3">
+										<div className="flex flex-wrap items-center gap-2">
+											{auxiliaryTransitions.map(renderTransitionButton)}
+											{request.status === 'aprovado' && !request.dit_ciente_at &&
+												['operator', 'manager', 'admin'].includes(currentUserRole) &&
+												!showDitForm && (
+													<button
+														onClick={() => setShowDitForm(true)}
+														disabled={isActing}
+														className="px-4 py-2 text-sm rounded-lg font-medium transition-colors bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
+													>
+														<CheckCheck size={14} className="inline mr-1.5" />
+														Marcar DIT Ciente
+													</button>
+												)}
+										</div>
+										<div className="flex flex-wrap items-center gap-2 ml-auto">
+											{decisionTransitions.map(renderTransitionButton)}
+										</div>
+									</div>
 									</div>
 									}
 								</div>
