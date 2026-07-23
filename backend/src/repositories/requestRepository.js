@@ -421,7 +421,7 @@ async function findRequestsForVisitRoute(pool) {
      FROM requests r
      JOIN units   u  ON u.id = r.unit_id
      JOIN people  p  ON p.id = r.requester_person_id
-     LEFT JOIN technical_visits tv ON tv.request_id = r.id
+     LEFT JOIN technical_visits tv ON tv.request_id = r.id AND tv.completed_at IS NULL
      LEFT JOIN users            ua ON ua.id = tv.assigned_to
      WHERE r.status = 'visita_tecnica_solicitada'
      ORDER BY u.rpa NULLS LAST, tv.scheduled_date NULLS FIRST`

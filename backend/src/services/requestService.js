@@ -19,8 +19,8 @@ const CHANNELS_BY_TYPE = {
 // Fluxo unificado para todos os tipos:
 //
 //   requisitado
-//     → visita_tecnica_solicitada  (botão "Solicitar Visita Técnica")
-//     → aguardando_aprovacao       (pular visita diretamente)
+//     → visita_tecnica_solicitada  (1ª oportunidade: "Solicitar Visita Técnica")
+//     → aguardando_aprovacao       (pular visita diretamente — manager/admin)
 //
 //   visita_tecnica_solicitada
 //     → aguardando_aprovacao  (automático ao registrar resultado da visita)
@@ -29,6 +29,7 @@ const CHANNELS_BY_TYPE = {
 //     → aguardando_aprovacao
 //
 //   aguardando_aprovacao
+//     → visita_tecnica_solicitada  (2ª oportunidade: gerência solicita visita)
 //     → aprovado   (gerência aprova — bloqueante)
 //     → reprovado
 //
@@ -58,6 +59,8 @@ const TRANSITIONS = {
     cancelado:            ['manager', 'admin'],
   },
   aguardando_aprovacao: {
+    // 2ª oportunidade de visita técnica, exclusiva da gerência/admin.
+    visita_tecnica_solicitada: ['manager', 'admin'],
     aprovado:   ['manager', 'admin'],
     reprovado:  ['manager', 'admin'],
     cancelado:  ['manager', 'admin'],
@@ -216,11 +219,15 @@ async function scheduleTechnicalVisit(pool, requestId, data, currentUserId) {
     throw new Error('Agendamento disponível apenas após ativação do botão "Solicitar Visita Técnica".')
   }
 
-  const existing = await pool.query(
-    'SELECT id FROM technical_visits WHERE request_id = $1 LIMIT 1', [requestId]
+  // Permite N visitas por solicitação; só uma pode ficar pendente por vez.
+  const pending = await pool.query(
+    `SELECT id FROM technical_visits
+     WHERE request_id = $1 AND completed_at IS NULL
+     LIMIT 1`,
+    [requestId]
   )
-  if (existing.rowCount > 0) {
-    throw new Error('Já existe uma visita técnica registrada para esta solicitação.')
+  if (pending.rowCount > 0) {
+    throw new Error('Já existe uma visita técnica pendente para esta solicitação. Conclua-a antes de agendar outra.')
   }
 
   return repository.createTechnicalVisit(pool, {
@@ -238,6 +245,9 @@ async function updateVisitSchedule(pool, visitId, data, currentUserId) {
   )
   if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
   const visit = visitRes.rows[0]
+  if (visit.completed_at) {
+    throw new Error('Não é possível editar o agendamento de uma visita já concluída.')
+  }
 
   const reqRes = await pool.query(
     'SELECT status FROM requests WHERE id = $1', [visit.request_id]
