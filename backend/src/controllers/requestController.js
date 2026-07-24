@@ -104,16 +104,29 @@ async function scheduleTechnicalVisit(req, res, pool, logAudit) {
 async function completeTechnicalVisit(req, res, pool, logAudit) {
   try {
     const visitId = parseInt(req.params.visitId)
-    const { result, findings } = req.body
-    const data = await service.completeTechnicalVisit(pool, visitId, result, findings, req.user.id)
+    const { item_results, findings, result } = req.body
+
+    // Compatibilidade: resultado único antigo → aplica a todos os itens
+    let itemResults = item_results
+    if ((!itemResults || !Array.isArray(itemResults)) && result) {
+      const items = await repository.findCatalogItemsByRequestId(pool, parseInt(req.params.id))
+      itemResults = items.map((item) => ({
+        catalog_item_id: item.id,
+        result,
+        findings: findings || null,
+      }))
+    }
+
+    const data = await service.completeTechnicalVisit(pool, visitId, itemResults, findings, req.user.id)
     await logAudit(req.user.id, 'technical_visit_completed', 'technical_visits', visitId,
-      { request_id: data.request_id, result }, req.ip)
+      { request_id: data.request_id, status: data.status, item_results: data.item_results }, req.ip)
     res.status(200).json(data)
   } catch (err) {
     const status =
       err.message.includes('não encontrada') ? 404 :
       err.message.includes('obrigatório') || err.message.includes('concluída') ||
-      err.message.includes('disponível') ? 400 : 500
+      err.message.includes('disponível') || err.message.includes('inválid') ||
+      err.message.includes('equipamento') ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }
@@ -136,15 +149,45 @@ async function updateVisitSchedule(req, res, pool, logAudit) {
 async function updateVisitResult(req, res, pool, logAudit) {
   try {
     const visitId = parseInt(req.params.visitId)
-    const { result, findings } = req.body
-    const visit = await service.updateVisitResult(pool, visitId, result, findings, req.user.id)
+    const { item_results, findings, result } = req.body
+
+    let itemResults = item_results
+    if ((!itemResults || !Array.isArray(itemResults)) && result) {
+      const items = await repository.findCatalogItemsByRequestId(pool, parseInt(req.params.id))
+      itemResults = items.map((item) => ({
+        catalog_item_id: item.id,
+        result,
+        findings: findings || null,
+      }))
+    }
+
+    const visit = await service.updateVisitResult(pool, visitId, itemResults, findings, req.user.id)
     await logAudit(req.user.id, 'technical_visit_result_updated', 'technical_visits', visitId,
-      { request_id: parseInt(req.params.id), result }, req.ip)
+      { request_id: parseInt(req.params.id) }, req.ip)
     res.status(200).json(visit)
   } catch (err) {
     const status =
       err.message.includes('não encontrada') ? 404 :
-      err.message.includes('inválido') || err.message.includes('concluída') ? 400 : 500
+      err.message.includes('inválido') || err.message.includes('concluída') ||
+      err.message.includes('deliberação') || err.message.includes('equipamento') ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
+async function submitItemDeliberations(req, res, pool, logAudit) {
+  try {
+    const requestId = parseInt(req.params.id)
+    const { decisions, notes } = req.body || {}
+    const result = await service.submitItemDeliberations(pool, requestId, decisions, req.user, notes)
+    await logAudit(req.user.id, 'request_item_deliberation', 'requests', requestId,
+      { decisions, notes }, req.ip)
+    res.status(200).json(result)
+  } catch (err) {
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('permissão') || err.message.includes('Deliberação') ||
+      err.message.includes('obrigatório') || err.message.includes('inválid') ||
+      err.message.includes('Quantidade') || err.message.includes('mudou') ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }
@@ -250,6 +293,7 @@ module.exports = {
   updateVisitSchedule,
   updateVisitResult,
   completeTechnicalVisit,
+  submitItemDeliberations,
   listTechnicalVisits,
   getApprovedPrefill,
   getMovementPrefill,

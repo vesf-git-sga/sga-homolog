@@ -75,6 +75,9 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
   router.patch('/requests/:id/status', authenticateToken,
     (req, res) => controller.changeStatus(req, res, pool, logAudit))
 
+  router.post('/requests/:id/item-deliberations', authenticateToken,
+    (req, res) => controller.submitItemDeliberations(req, res, pool, logAudit))
+
   // ─── Histórico de status ─────────────────────────────────────────────────
   router.get('/requests/:id/history', authenticateToken,
     (req, res) => controller.getStatusHistory(req, res, pool))

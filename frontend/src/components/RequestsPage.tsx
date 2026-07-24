@@ -10,7 +10,17 @@ import { EquipmentRequest } from '../types/requests'
 import { REQUEST_TYPE_LABELS, REQUEST_STATUS_LABELS, REQUEST_CHANNEL_LABELS } from '../utils/translations'
 import { requestsApi } from '../services/requestsApi'
 
-const ACTIVE_STATUSES = ['requisitado', 'visita_tecnica_solicitada', 'visita_realizada', 'aguardando_aprovacao', 'aprovado', 'em_execucao', 'indisponivel_estoque']
+const ACTIVE_STATUSES = [
+  'requisitado',
+  'visita_tecnica_solicitada',
+  'visita_realizada',
+  'aguardando_aprovacao',
+  'necessidade_parcialmente_constatada',
+  'aprovado',
+  'parcialmente_aprovado',
+  'em_execucao',
+  'indisponivel_estoque',
+]
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 const KpiCard = ({
@@ -114,12 +124,12 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
 
   // ─── KPIs ──────────────────────────────────────────────────────────────────
   const kpiAtivas       = useMemo(() => requests.filter(r => ACTIVE_STATUSES.includes(r.status)).length, [requests])
-  const kpiAguardando   = useMemo(() => requests.filter(r => r.status === 'aguardando_aprovacao').length, [requests])
-  const kpiAprovadas    = useMemo(() => requests.filter(r => r.status === 'aprovado').length, [requests])
+  const kpiAguardando   = useMemo(() => requests.filter(r => ['aguardando_aprovacao', 'necessidade_parcialmente_constatada'].includes(r.status)).length, [requests])
+  const kpiAprovadas    = useMemo(() => requests.filter(r => ['aprovado', 'parcialmente_aprovado'].includes(r.status)).length, [requests])
   const kpiConcluidas   = useMemo(() => requests.filter(r => r.status === 'concluido').length, [requests])
   const kpiVisitas      = useMemo(() => requests.filter(r => r.status === 'visita_tecnica_solicitada').length, [requests])
-  const kpiPendenteDIT  = useMemo(() => requests.filter(r => r.status === 'aprovado' && !r.dit_ciente_at).length, [requests])
-  const kpiDitAgendado  = useMemo(() => requests.filter(r => r.status === 'aprovado' && !!r.dit_ciente_at).length, [requests])
+  const kpiPendenteDIT  = useMemo(() => requests.filter(r => ['aprovado', 'parcialmente_aprovado'].includes(r.status) && !r.dit_ciente_at).length, [requests])
+  const kpiDitAgendado  = useMemo(() => requests.filter(r => ['aprovado', 'parcialmente_aprovado'].includes(r.status) && !!r.dit_ciente_at).length, [requests])
   const kpiIndisponivel = useMemo(() => requests.filter(r => r.status === 'indisponivel_estoque').length, [requests])
 
   // ─── Filtros ───────────────────────────────────────────────────────────────
@@ -127,11 +137,11 @@ const RequestsPage = ({ currentUserRole }: RequestsPageProps) => {
     let list = requests
 
     if (activeKpi === 'ativas')       list = list.filter(r => ACTIVE_STATUSES.includes(r.status))
-    if (activeKpi === 'aguardando')   list = list.filter(r => r.status === 'aguardando_aprovacao')
-    if (activeKpi === 'aprovadas')    list = list.filter(r => r.status === 'aprovado')
+    if (activeKpi === 'aguardando')   list = list.filter(r => ['aguardando_aprovacao', 'necessidade_parcialmente_constatada'].includes(r.status))
+    if (activeKpi === 'aprovadas')    list = list.filter(r => ['aprovado', 'parcialmente_aprovado'].includes(r.status))
     if (activeKpi === 'concluidas')   list = list.filter(r => r.status === 'concluido')
-    if (activeKpi === 'pendente_dit') list = list.filter(r => r.status === 'aprovado' && !r.dit_ciente_at)
-    if (activeKpi === 'dit_agendado') list = list.filter(r => r.status === 'aprovado' && !!r.dit_ciente_at)
+    if (activeKpi === 'pendente_dit') list = list.filter(r => ['aprovado', 'parcialmente_aprovado'].includes(r.status) && !r.dit_ciente_at)
+    if (activeKpi === 'dit_agendado') list = list.filter(r => ['aprovado', 'parcialmente_aprovado'].includes(r.status) && !!r.dit_ciente_at)
     if (activeKpi === 'indisponivel') list = list.filter(r => r.status === 'indisponivel_estoque')
 
     if (filterStatus) list = list.filter(r => r.status === filterStatus)

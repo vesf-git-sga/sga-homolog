@@ -4944,7 +4944,7 @@ const MovementModal = ({
 		} catch (err: any) {
 			setRequestPrefillError(
 				err.response?.status === 404 ?
-					'Protocolo não encontrado ou solicitação não está aprovada.'
+					'Protocolo não encontrado ou solicitação não está aprovada/parcialmente aprovada.'
 				:	'Erro ao buscar solicitação. Verifique o protocolo e tente novamente.',
 			);
 		} finally {
@@ -5450,7 +5450,7 @@ const MovementModal = ({
 												0 && (
 												<div className="border-t border-indigo-100 px-4 py-3">
 													<p className="text-xs font-semibold text-indigo-700 uppercase mb-2">
-														Ativo solicitado —
+														Equipamentos aprovados —
 														referência para o
 														registro:
 													</p>
@@ -5484,19 +5484,16 @@ const MovementModal = ({
 																		{item.model_name && (
 																			<span className="text-gray-500">
 																				{' '}
+																				·{' '}
 																				{
 																					item.model_name
 																				}
 																			</span>
 																		)}
-																		{item.description && (
-																			<span className="text-gray-400 italic">
-																				{' '}
-																				(
-																				{
-																					item.description
-																				}
-																				)
+																		{item.requested_quantity != null &&
+																			item.requested_quantity !== item.quantity && (
+																			<span className="text-xs text-indigo-600 ml-1">
+																				(solicitado: {item.requested_quantity})
 																			</span>
 																		)}
 																	</span>
@@ -5508,7 +5505,7 @@ const MovementModal = ({
 														Vincule um ativo
 														disponível no estoque
 														conforme as regras de
-														negócio.
+														negócio. Apenas equipamentos aprovados são listados.
 													</p>
 												</div>
 											)}

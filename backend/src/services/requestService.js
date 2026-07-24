@@ -23,17 +23,17 @@ const CHANNELS_BY_TYPE = {
 //     → aguardando_aprovacao       (pular visita diretamente — manager/admin)
 //
 //   visita_tecnica_solicitada
-//     → aguardando_aprovacao  (automático ao registrar resultado da visita)
+//     → aguardando_aprovacao | necessidade_parcialmente_constatada
+//       (automático ao registrar resultado da visita por equipamento)
 //
 //   visita_realizada  (status legado — mantido para registros antigos)
 //     → aguardando_aprovacao
 //
-//   aguardando_aprovacao
+//   aguardando_aprovacao | necessidade_parcialmente_constatada
 //     → visita_tecnica_solicitada  (2ª oportunidade: gerência solicita visita)
-//     → aprovado   (gerência aprova — bloqueante)
-//     → reprovado
+//     → aprovado | parcialmente_aprovado | reprovado  (via deliberação por item)
 //
-//   aprovado
+//   aprovado | parcialmente_aprovado
 //     → em_execucao  (auto via movement com request_id)
 //
 //   em_execucao
@@ -50,7 +50,7 @@ const TRANSITIONS = {
     cancelado:                 ['manager', 'admin'],
   },
   visita_tecnica_solicitada: {
-    // Sem transição manual: completeTechnicalVisit avança direto para aguardando_aprovacao.
+    // Sem transição manual: completeTechnicalVisit avança automaticamente.
     cancelado: ['manager', 'admin'],
   },
   visita_realizada: {
@@ -59,20 +59,25 @@ const TRANSITIONS = {
     cancelado:            ['manager', 'admin'],
   },
   aguardando_aprovacao: {
-    // 2ª oportunidade de visita técnica, exclusiva da gerência/admin.
     visita_tecnica_solicitada: ['manager', 'admin'],
-    aprovado:   ['manager', 'admin'],
-    reprovado:  ['manager', 'admin'],
     cancelado:  ['manager', 'admin'],
   },
-  // aprovado → em_execucao: exclusivamente automático (criação de movimentação vinculada)
-  // em_execucao → concluido: exclusivamente automático (confirmação da movimentação)
-  // Transições manuais removidas para garantir rastreabilidade pelo fluxo de movimentações.
+  necessidade_parcialmente_constatada: {
+    visita_tecnica_solicitada: ['manager', 'admin'],
+    cancelado:  ['manager', 'admin'],
+  },
+  // aprovado/parcialmente_aprovado → em_execucao: automático (movimentação)
+  // em_execucao → concluido: automático (confirmação)
   aprovado: {
     indisponivel_estoque: ['operator', 'manager', 'admin'],
     cancelado:            ['manager', 'admin'],
   },
+  parcialmente_aprovado: {
+    indisponivel_estoque: ['operator', 'manager', 'admin'],
+    cancelado:            ['manager', 'admin'],
+  },
   indisponivel_estoque: {
+    // Frontend envia "aprovado"; o service restaura aprovado ou parcialmente_aprovado.
     aprovado:  ['operator', 'manager', 'admin'],
     cancelado: ['manager', 'admin'],
   },
@@ -83,6 +88,44 @@ const TRANSITIONS = {
 
 // Statuses que encerram o ciclo de vida da solicitação
 const TERMINAL_STATUSES = ['concluido', 'reprovado', 'cancelado']
+
+const DELIBERATION_STATUSES = ['aguardando_aprovacao', 'necessidade_parcialmente_constatada']
+const APPROVED_LIKE_STATUSES = ['aprovado', 'parcialmente_aprovado']
+
+function aggregateVisitStatus(itemResults) {
+  const results = itemResults.map((i) => i.result)
+  const allSame = results.every((r) => r === results[0])
+  if (allSame) return 'aguardando_aprovacao'
+  return 'necessidade_parcialmente_constatada'
+}
+
+function aggregateDeliberationStatus(decisions) {
+  const approved = decisions.filter((d) => d.decision === 'aprovado')
+  const rejected = decisions.filter((d) => d.decision === 'reprovado')
+  if (approved.length === decisions.length) return 'aprovado'
+  if (rejected.length === decisions.length) return 'reprovado'
+  return 'parcialmente_aprovado'
+}
+
+function summarizeVisitResults(itemResults) {
+  const constatados = itemResults.filter((i) => i.result === 'constatada').length
+  const naoConstatados = itemResults.length - constatados
+  return `Visita concluída por equipamento: ${constatados} necessidade(s) constatada(s), ${naoConstatados} não constatada(s).`
+}
+
+function summarizeDeliberations(decisions, itemsById) {
+  const parts = decisions.map((d) => {
+    const item = itemsById.get(d.catalog_item_id)
+    const label = item
+      ? (item.item_type_name || `Item #${d.catalog_item_id}`)
+      : `Item #${d.catalog_item_id}`
+    if (d.decision === 'aprovado') {
+      return `${label}: aprovado (qtd ${d.approved_quantity})`
+    }
+    return `${label}: reprovado`
+  })
+  return `Deliberação por equipamento. ${parts.join('; ')}.`
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -194,10 +237,22 @@ async function changeStatus(pool, requestId, newStatus, currentUser, notes) {
     throw new Error(`Solicitação já está em status terminal (${request.status}).`)
   }
 
-  const allowedRoles = TRANSITIONS[request.status]?.[newStatus]
+  // Ao liberar estoque, restaura o status aprovado correto conforme a deliberação.
+  let targetStatus = newStatus
+  if (request.status === 'indisponivel_estoque' && APPROVED_LIKE_STATUSES.includes(newStatus)) {
+    const deliberations = await repository.findItemDeliberations(pool, requestId)
+    if (deliberations.length > 0) {
+      targetStatus = aggregateDeliberationStatus(deliberations)
+    }
+  }
+
+  const allowedRoles = TRANSITIONS[request.status]?.[targetStatus]
+    || (request.status === 'indisponivel_estoque' && APPROVED_LIKE_STATUSES.includes(newStatus)
+      ? TRANSITIONS.indisponivel_estoque.aprovado
+      : null)
   if (!allowedRoles) {
     throw new Error(
-      `Transição de '${request.status}' para '${newStatus}' não é permitida.`
+      `Transição de '${request.status}' para '${targetStatus}' não é permitida.`
     )
   }
   if (!allowedRoles.includes(currentUser.role)) {
@@ -205,7 +260,7 @@ async function changeStatus(pool, requestId, newStatus, currentUser, notes) {
   }
 
   return repository.transitionStatus(
-    pool, requestId, newStatus, currentUser.id, notes, null, request.status
+    pool, requestId, targetStatus, currentUser.id, notes, null, request.status
   )
 }
 
@@ -264,9 +319,14 @@ async function updateVisitSchedule(pool, visitId, data, currentUserId) {
   })
 }
 
-async function updateVisitResult(pool, visitId, result, findings, currentUserId) {
-  if (!result || !['constatada', 'nao_constatada'].includes(result)) {
-    throw new Error('Resultado inválido: use "constatada" ou "nao_constatada".')
+async function updateVisitResult(pool, visitId, itemResults, findings, currentUserId) {
+  if (!Array.isArray(itemResults) || itemResults.length === 0) {
+    throw new Error('Informe o resultado por equipamento.')
+  }
+  for (const item of itemResults) {
+    if (!item.catalog_item_id || !['constatada', 'nao_constatada'].includes(item.result)) {
+      throw new Error('Resultado inválido: use "constatada" ou "nao_constatada" por equipamento.')
+    }
   }
 
   const visitRes = await pool.query(
@@ -275,23 +335,68 @@ async function updateVisitResult(pool, visitId, result, findings, currentUserId)
   if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
   if (!visitRes.rows[0].completed_at) throw new Error('A visita ainda não foi concluída.')
 
-  // Bloqueia edição após aprovação: o parecer da visita é congelado a partir deste ponto
+  const requestId = visitRes.rows[0].request_id
   const reqRes = await pool.query(
-    'SELECT status FROM requests WHERE id = $1', [visitRes.rows[0].request_id]
+    'SELECT status FROM requests WHERE id = $1', [requestId]
   )
-  if (reqRes.rows.length > 0) {
-    const LOCKED = ['aprovado', 'em_execucao', 'concluido']
-    if (LOCKED.includes(reqRes.rows[0].status)) {
-      throw new Error('O parecer da visita não pode ser alterado após a solicitação ser aprovada.')
-    }
+  if (reqRes.rows.length === 0) throw new Error('Solicitação não encontrada.')
+  const LOCKED = ['aprovado', 'parcialmente_aprovado', 'em_execucao', 'concluido', 'reprovado']
+  if (LOCKED.includes(reqRes.rows[0].status)) {
+    throw new Error('O parecer da visita não pode ser alterado após a deliberação da gerência.')
   }
 
-  return repository.updateTechnicalVisitResult(pool, visitId, result, findings)
+  const catalogItems = await repository.findCatalogItemsByRequestId(pool, requestId)
+  const catalogIds = new Set(catalogItems.map((i) => i.id))
+  const payloadIds = new Set(itemResults.map((i) => i.catalog_item_id))
+  if (catalogIds.size !== payloadIds.size || [...catalogIds].some((id) => !payloadIds.has(id))) {
+    throw new Error('É obrigatório informar o resultado para todos os equipamentos da solicitação.')
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await repository.upsertVisitItemResults(client, visitId, itemResults)
+
+    const allSame = itemResults.every((i) => i.result === itemResults[0].result)
+    await client.query(
+      `UPDATE technical_visits
+       SET result = $1, findings = $2
+       WHERE id = $3`,
+      [allSame ? itemResults[0].result : null, findings || null, visitId]
+    )
+
+    const newStatus = aggregateVisitStatus(itemResults)
+    const oldStatus = reqRes.rows[0].status
+    if (DELIBERATION_STATUSES.includes(oldStatus) && oldStatus !== newStatus) {
+      await client.query(
+        `UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2`,
+        [newStatus, requestId]
+      )
+      await client.query(
+        `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [requestId, oldStatus, newStatus, summarizeVisitResults(itemResults) + ' (resultado corrigido)', currentUserId]
+      )
+    }
+
+    await client.query('COMMIT')
+    return repository.findVisitItemResults(pool, visitId)
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
 }
 
-async function completeTechnicalVisit(pool, visitId, result, findings, currentUserId) {
-  if (!result || !['constatada', 'nao_constatada'].includes(result)) {
-    throw new Error('Resultado da visita é obrigatório: "constatada" ou "nao_constatada".')
+async function completeTechnicalVisit(pool, visitId, itemResults, findings, currentUserId) {
+  if (!Array.isArray(itemResults) || itemResults.length === 0) {
+    throw new Error('Resultado da visita é obrigatório por equipamento.')
+  }
+  for (const item of itemResults) {
+    if (!item.catalog_item_id || !['constatada', 'nao_constatada'].includes(item.result)) {
+      throw new Error('Resultado da visita é obrigatório: "constatada" ou "nao_constatada" por equipamento.')
+    }
   }
 
   const client = await pool.connect()
@@ -306,36 +411,155 @@ async function completeTechnicalVisit(pool, visitId, result, findings, currentUs
     const visit = visitRes.rows[0]
     if (visit.completed_at) throw new Error('Esta visita já foi concluída.')
 
+    const itemsRes = await client.query(
+      'SELECT id FROM request_catalog_items WHERE request_id = $1',
+      [visit.request_id]
+    )
+    const catalogIds = new Set(itemsRes.rows.map((r) => r.id))
+    const payloadIds = new Set(itemResults.map((i) => i.catalog_item_id))
+    if (catalogIds.size === 0) throw new Error('A solicitação não possui equipamentos.')
+    if (catalogIds.size !== payloadIds.size || [...catalogIds].some((id) => !payloadIds.has(id))) {
+      throw new Error('É obrigatório informar o resultado para todos os equipamentos da solicitação.')
+    }
+
+    const allSame = itemResults.every((i) => i.result === itemResults[0].result)
+    const aggregatedResult = allSame ? itemResults[0].result : null
+    const newStatus = aggregateVisitStatus(itemResults)
+
     await client.query(
       `UPDATE technical_visits
        SET result = $1, findings = $2, completed_by = $3, completed_at = NOW()
        WHERE id = $4`,
-      [result, findings || null, currentUserId, visitId]
+      [aggregatedResult, findings || null, currentUserId, visitId]
     )
 
-    // Avança direto para aguardando_aprovacao (skip visita_realizada)
+    await repository.upsertVisitItemResults(client, visitId, itemResults)
+
     await client.query(
-      `UPDATE requests SET status = 'aguardando_aprovacao', updated_at = NOW() WHERE id = $1`,
-      [visit.request_id]
+      `UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2`,
+      [newStatus, visit.request_id]
     )
     await client.query(
       `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
-       VALUES ($1, 'visita_tecnica_solicitada', 'aguardando_aprovacao', $2, $3)`,
+       VALUES ($1, 'visita_tecnica_solicitada', $2, $3, $4)`,
       [
         visit.request_id,
-        `Visita concluída. Resultado: ${result === 'constatada' ? 'Defeito constatado' : 'Defeito não constatado'}.${findings ? ' Parecer: ' + findings : ''}`,
+        newStatus,
+        summarizeVisitResults(itemResults) + (findings ? ` Parecer geral: ${findings}` : ''),
         currentUserId,
       ]
     )
 
     await client.query('COMMIT')
-    return { visit_id: visitId, result, request_id: visit.request_id }
+    return {
+      visit_id: visitId,
+      request_id: visit.request_id,
+      status: newStatus,
+      item_results: itemResults,
+    }
   } catch (err) {
     await client.query('ROLLBACK')
     throw err
   } finally {
     client.release()
   }
+}
+
+async function submitItemDeliberations(pool, requestId, decisions, currentUser, notes) {
+  if (!['manager', 'admin'].includes(currentUser.role)) {
+    throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para deliberar.`)
+  }
+  if (!Array.isArray(decisions) || decisions.length === 0) {
+    throw new Error('Informe a deliberação de cada equipamento.')
+  }
+
+  const request = await repository.findById(pool, requestId)
+  if (!request) throw new Error('Solicitação não encontrada.')
+  if (!DELIBERATION_STATUSES.includes(request.status)) {
+    throw new Error('Deliberação disponível apenas enquanto a solicitação aguarda aprovação.')
+  }
+
+  const catalogItems = await repository.findCatalogItemsByRequestId(pool, requestId)
+  if (catalogItems.length === 0) throw new Error('A solicitação não possui equipamentos.')
+
+  const itemsById = new Map(catalogItems.map((i) => [i.id, i]))
+  const payloadIds = new Set(decisions.map((d) => d.catalog_item_id))
+  if (itemsById.size !== payloadIds.size || [...itemsById.keys()].some((id) => !payloadIds.has(id))) {
+    throw new Error('É obrigatório deliberar sobre todos os equipamentos da solicitação.')
+  }
+
+  const normalized = []
+  for (const d of decisions) {
+    if (!['aprovado', 'reprovado'].includes(d.decision)) {
+      throw new Error('Decisão inválida: use "aprovado" ou "reprovado".')
+    }
+    const item = itemsById.get(d.catalog_item_id)
+    if (d.decision === 'aprovado') {
+      const qty = parseInt(d.approved_quantity, 10)
+      if (!qty || qty < 1) {
+        throw new Error(`Quantidade aprovada inválida para o equipamento "${item.item_type_name}".`)
+      }
+      if (qty > item.quantity) {
+        throw new Error(
+          `Quantidade aprovada (${qty}) não pode exceder a solicitada (${item.quantity}) em "${item.item_type_name}".`
+        )
+      }
+      normalized.push({
+        catalog_item_id: d.catalog_item_id,
+        decision: 'aprovado',
+        approved_quantity: qty,
+        notes: d.notes || null,
+      })
+    } else {
+      normalized.push({
+        catalog_item_id: d.catalog_item_id,
+        decision: 'reprovado',
+        approved_quantity: null,
+        notes: d.notes || null,
+      })
+    }
+  }
+
+  const newStatus = aggregateDeliberationStatus(normalized)
+  const historyNotes = (notes ? `${notes} ` : '') + summarizeDeliberations(normalized, itemsById)
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const cur = await client.query(
+      'SELECT * FROM requests WHERE id = $1 FOR UPDATE',
+      [requestId]
+    )
+    if (cur.rows.length === 0) throw new Error('Solicitação não encontrada.')
+    if (!DELIBERATION_STATUSES.includes(cur.rows[0].status)) {
+      throw new Error('Status da solicitação mudou enquanto você agia.')
+    }
+
+    await repository.upsertItemDeliberations(client, requestId, normalized, currentUser.id)
+
+    const extraSql = APPROVED_LIKE_STATUSES.includes(newStatus)
+      ? `, approved_by = ${currentUser.id}, approved_at = NOW()`
+      : ''
+    await client.query(
+      `UPDATE requests SET status = $1, updated_at = NOW()${extraSql} WHERE id = $2`,
+      [newStatus, requestId]
+    )
+    await client.query(
+      `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [requestId, cur.rows[0].status, newStatus, historyNotes, currentUser.id]
+    )
+
+    await client.query('COMMIT')
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+
+  return getRequestById(pool, requestId, currentUser)
 }
 
 // ─── Acoplamento com movimentações ────────────────────────────────────────
@@ -363,8 +587,8 @@ async function getMovementPrefill(pool, protocol) {
 async function ditCiente(pool, requestId, currentUser, modalidade, previsaoAt) {
   const request = await repository.findById(pool, requestId)
   if (!request) throw new Error('Solicitação não encontrada.')
-  if (request.status !== 'aprovado') {
-    throw new Error('A ciência da DIT só pode ser registrada quando a solicitação está aprovada.')
+  if (!APPROVED_LIKE_STATUSES.includes(request.status)) {
+    throw new Error('A ciência da DIT só pode ser registrada quando a solicitação está aprovada ou parcialmente aprovada.')
   }
   if (request.dit_ciente_at) {
     throw new Error('A DIT já registrou ciência desta solicitação.')
@@ -428,6 +652,7 @@ module.exports = {
   updateVisitSchedule,
   updateVisitResult,
   completeTechnicalVisit,
+  submitItemDeliberations,
   updateRequestFromMovement,
   findApprovedRequest,
   getMovementPrefill,
@@ -435,4 +660,6 @@ module.exports = {
   ditCiente,
   registrarEventoDit,
   getUnavailableQueue,
+  DELIBERATION_STATUSES,
+  APPROVED_LIKE_STATUSES,
 }

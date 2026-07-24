@@ -5,7 +5,9 @@ export type RequestStatus =
   | 'visita_tecnica_solicitada'
   | 'visita_realizada'
   | 'aguardando_aprovacao'
+  | 'necessidade_parcialmente_constatada'
   | 'aprovado'
+  | 'parcialmente_aprovado'
   | 'reprovado'
   | 'em_execucao'
   | 'concluido'
@@ -14,9 +16,26 @@ export type RequestStatus =
 
 export type InputChannel = 'email' | 'sei' | 'chamado'
 
+export type VisitItemResultValue = 'constatada' | 'nao_constatada'
+export type ItemDeliberationDecision = 'aprovado' | 'reprovado'
+
 export interface CatalogBrand { id: number; name: string }
 export interface CatalogModel { id: number; name: string; brand_id: number; item_type_id: number }
 export interface ItemType     { id: number; name: string; code: string }
+
+export interface ItemVisitResult {
+  visit_id: number
+  result: VisitItemResultValue
+  findings?: string | null
+}
+
+export interface ItemDeliberation {
+  decision: ItemDeliberationDecision
+  approved_quantity?: number | null
+  notes?: string | null
+  decided_at?: string | null
+  decided_by_name?: string | null
+}
 
 export interface RequestCatalogItem {
   id: number
@@ -30,6 +49,8 @@ export interface RequestCatalogItem {
   description?: string | null
   quantity: number
   created_at: string
+  visit_result?: ItemVisitResult | null
+  deliberation?: ItemDeliberation | null
 }
 
 export interface EquipmentRequest {
@@ -84,6 +105,13 @@ export interface TechnicalVisit {
   created_by: number
   created_by_name?: string
   created_at: string
+  item_results?: Array<{
+    catalog_item_id: number
+    result: 'constatada' | 'nao_constatada'
+    findings?: string | null
+    item_type_name?: string
+    quantity?: number
+  }>
 }
 
 export interface StatusHistoryEntry {
