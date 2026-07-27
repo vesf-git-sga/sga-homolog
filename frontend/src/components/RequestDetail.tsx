@@ -925,21 +925,8 @@ const RequestDetail = ({
 																	Solicitado: × {item.quantity}
 																</span>
 															</div>
-															<div className="flex flex-wrap gap-1.5">
-																{item.visit_result && (
-																	<span
-																		className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
-																			item.visit_result.result === 'constatada'
-																				? 'bg-red-100 text-red-700'
-																				: 'bg-green-100 text-green-700'
-																		}`}
-																	>
-																		{item.visit_result.result === 'constatada'
-																			? `Constatada × ${item.visit_result.constatada_quantity ?? item.quantity}`
-																			: 'Necessidade Não Constatada'}
-																	</span>
-																)}
-																{item.deliberation && (
+															{item.deliberation && (
+																<div className="flex flex-wrap gap-1.5">
 																	<span
 																		className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
 																			item.deliberation.decision === 'aprovado'
@@ -951,8 +938,8 @@ const RequestDetail = ({
 																			? `Aprovado × ${item.deliberation.approved_quantity ?? item.quantity}`
 																			: 'Reprovado'}
 																	</span>
-																)}
-															</div>
+																</div>
+															)}
 														</li>
 													))}
 												</ul>
@@ -998,7 +985,13 @@ const RequestDetail = ({
 													Visitas Técnicas
 												</p>
 												<div className="space-y-2">
-													{request.visits.map((v) => {
+													{[...(request.visits ?? [])]
+														.sort(
+															(a, b) =>
+																new Date(a.created_at).getTime() -
+																new Date(b.created_at).getTime(),
+														)
+														.map((v) => {
 														const canEditSchedule =
 															!v.completed_at &&
 															request.status ===

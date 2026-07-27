@@ -280,7 +280,7 @@ async function findTechnicalVisitsByRequestId(pool, requestId) {
      LEFT JOIN users uc  ON uc.id = tv.completed_by
      LEFT JOIN users ucr ON ucr.id = tv.created_by
      WHERE tv.request_id = $1
-     ORDER BY tv.created_at DESC`,
+     ORDER BY tv.created_at ASC`,
     [requestId]
   )
   return result.rows
