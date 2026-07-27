@@ -39,7 +39,10 @@ const DELIBERATION_STATUSES = new Set([
 
 const APPROVED_LIKE_STATUSES = new Set(['aprovado', 'parcialmente_aprovado']);
 
-type ItemVisitDraft = Record<number, VisitItemResultValue | ''>;
+type ItemVisitDraft = Record<
+	number,
+	{ result: VisitItemResultValue | ''; constatada_quantity: number }
+>;
 type ItemDeliberationDraft = Record<
 	number,
 	{ decision: ItemDeliberationDecision | ''; approved_quantity: number }
@@ -230,6 +233,10 @@ const RequestDetail = ({
 	);
 	const [itemVisitResults, setItemVisitResults] = useState<ItemVisitDraft>({});
 	const [visitFindings, setVisitFindings] = useState('');
+	const [completingVisitMode, setCompletingVisitMode] = useState<
+		'itens' | 'frustrada' | null
+	>(null);
+	const [frustratedReason, setFrustratedReason] = useState('');
 
 	// Editar resultado existente (por equipamento)
 	const [editingVisitResultId, setEditingVisitResultId] = useState<
@@ -429,20 +436,53 @@ const RequestDetail = ({
 		}
 	};
 
-	const handleUpdateVisitResult = async (visitId: number) => {
+	const initItemVisitDraft = () => {
+		const draft: ItemVisitDraft = {};
+		(request?.items || []).forEach((item) => {
+			draft[item.id] = { result: '', constatada_quantity: item.quantity };
+		});
+		return draft;
+	};
+
+	const validateItemVisitDraft = (draft: ItemVisitDraft) => {
 		const items = request?.items || [];
-		const missing = items.filter((item) => !editItemVisitResults[item.id]);
-		if (missing.length > 0) {
-			addToast('Informe o resultado de todos os equipamentos.', 'error');
-			return;
+		for (const item of items) {
+			const entry = draft[item.id];
+			if (!entry?.result) {
+				addToast('Informe o resultado de todos os equipamentos.', 'error');
+				return false;
+			}
+			if (entry.result === 'constatada') {
+				const qty = Number(entry.constatada_quantity);
+				if (!qty || qty < 1 || qty > item.quantity) {
+					addToast(
+						`Quantidade constatada inválida para "${itemLabel(item)}".`,
+						'error',
+					);
+					return false;
+				}
+			}
 		}
+		return true;
+	};
+
+	const buildItemResultsPayload = (draft: ItemVisitDraft) =>
+		(request?.items || []).map((item) => {
+			const entry = draft[item.id];
+			return {
+				catalog_item_id: item.id,
+				result: entry.result as VisitItemResultValue,
+				constatada_quantity:
+					entry.result === 'constatada' ? entry.constatada_quantity : null,
+			};
+		});
+
+	const handleUpdateVisitResult = async (visitId: number) => {
+		if (!validateItemVisitDraft(editItemVisitResults)) return;
 		setIsActing(true);
 		try {
 			await requestsApi.updateVisitResult(requestId, visitId, {
-				item_results: items.map((item) => ({
-					catalog_item_id: item.id,
-					result: editItemVisitResults[item.id] as VisitItemResultValue,
-				})),
+				item_results: buildItemResultsPayload(editItemVisitResults),
 				findings: editVisitFindings || undefined,
 			});
 			addToast('Resultado atualizado.', 'success');
@@ -461,23 +501,16 @@ const RequestDetail = ({
 	};
 
 	const handleCompleteVisit = async (visitId: number) => {
-		const items = request?.items || [];
-		const missing = items.filter((item) => !itemVisitResults[item.id]);
-		if (missing.length > 0) {
-			addToast('Informe o resultado de todos os equipamentos.', 'error');
-			return;
-		}
+		if (!validateItemVisitDraft(itemVisitResults)) return;
 		setIsActing(true);
 		try {
 			await requestsApi.completeVisit(requestId, visitId, {
-				item_results: items.map((item) => ({
-					catalog_item_id: item.id,
-					result: itemVisitResults[item.id] as VisitItemResultValue,
-				})),
+				item_results: buildItemResultsPayload(itemVisitResults),
 				findings: visitFindings || undefined,
 			});
 			addToast('Visita técnica concluída.', 'success');
 			setCompletingVisitId(null);
+			setCompletingVisitMode(null);
 			setItemVisitResults({});
 			setVisitFindings('');
 			await loadRequest();
@@ -489,6 +522,44 @@ const RequestDetail = ({
 		} finally {
 			setIsActing(false);
 		}
+	};
+
+	const handleCompleteFrustratedVisit = async (visitId: number) => {
+		if (!frustratedReason.trim()) {
+			addToast('Informe o motivo da visita frustrada.', 'error');
+			return;
+		}
+		setIsActing(true);
+		try {
+			await requestsApi.completeVisit(requestId, visitId, {
+				outcome: 'frustrada',
+				reason: frustratedReason.trim(),
+			});
+			addToast(
+				'Visita frustrada registrada. Agende uma nova visita técnica.',
+				'success',
+			);
+			setCompletingVisitId(null);
+			setCompletingVisitMode(null);
+			setFrustratedReason('');
+			await loadRequest();
+			setShowScheduleVisit(true);
+		} catch (err: any) {
+			addToast(
+				err?.response?.data?.message || 'Erro ao registrar visita frustrada.',
+				'error',
+			);
+		} finally {
+			setIsActing(false);
+		}
+	};
+
+	const resetCompletingVisit = () => {
+		setCompletingVisitId(null);
+		setCompletingVisitMode(null);
+		setItemVisitResults({});
+		setVisitFindings('');
+		setFrustratedReason('');
 	};
 
 	const initDeliberationDraft = () => {
@@ -864,7 +935,7 @@ const RequestDetail = ({
 																		}`}
 																	>
 																		{item.visit_result.result === 'constatada'
-																			? 'Necessidade Constatada'
+																			? `Constatada × ${item.visit_result.constatada_quantity ?? item.quantity}`
 																			: 'Necessidade Não Constatada'}
 																	</span>
 																)}
@@ -936,13 +1007,17 @@ const RequestDetail = ({
 															editingVisitScheduleId ===
 															v.id;
 														const isRegisteringResult =
-															completingVisitId ===
-															v.id;
+															completingVisitId === v.id &&
+															completingVisitMode === 'itens';
+														const isRegisteringFrustrated =
+															completingVisitId === v.id &&
+															completingVisitMode === 'frustrada';
 														const isEditingResult =
 															editingVisitResultId ===
 															v.id;
 														const canEditVisitResult =
 															!!v.completed_at &&
+															v.result !== 'frustrada' &&
 															DELIBERATION_STATUSES.has(
 																request.status,
 															);
@@ -1143,7 +1218,11 @@ const RequestDetail = ({
 																			<div className="space-y-1">
 																				<div className="flex items-center gap-2 flex-wrap">
 																					{v.completed_at ?
-																						v.result === 'constatada' ?
+																						v.result === 'frustrada' ?
+																							<span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-800 rounded-full font-medium">
+																								Visita Frustrada
+																							</span>
+																						: v.result === 'constatada' ?
 																							<span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">
 																								Necessidade Constatada
 																							</span>
@@ -1232,10 +1311,186 @@ const RequestDetail = ({
 																				<p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
 																					Registrar resultado por equipamento
 																				</p>
-																				{(request.items || []).map((item) => (
+																				{(request.items || []).map((item) => {
+																					const draft = itemVisitResults[item.id] || {
+																						result: '' as const,
+																						constatada_quantity: item.quantity,
+																					};
+																					return (
+																						<div key={item.id} className="border border-gray-200 rounded-lg p-2 space-y-1.5">
+																							<p className="text-xs font-medium text-gray-700">
+																								{itemLabel(item)}
+																								<span className="text-gray-500 font-normal ml-2">
+																									Solicitado: × {item.quantity}
+																								</span>
+																							</p>
+																							<div className="flex gap-2">
+																								{[
+																									{ value: 'constatada', label: 'Constatada' },
+																									{ value: 'nao_constatada', label: 'Não constatada' },
+																								].map((opt) => (
+																									<button
+																										key={opt.value}
+																										type="button"
+																										onClick={() =>
+																											setItemVisitResults((prev) => ({
+																												...prev,
+																												[item.id]: {
+																													result: opt.value as VisitItemResultValue,
+																													constatada_quantity:
+																														prev[item.id]?.constatada_quantity || item.quantity,
+																												},
+																											}))
+																										}
+																										className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
+																											draft.result === opt.value
+																												? 'border-purple-500 bg-purple-50 text-purple-700'
+																												: 'border-gray-200 text-gray-600'
+																										}`}
+																									>
+																										{opt.label}
+																									</button>
+																								))}
+																							</div>
+																							{draft.result === 'constatada' && (
+																								<div>
+																									<label className="text-xs text-gray-600 mb-1 block">
+																										Quantidade com necessidade constatada
+																									</label>
+																									<input
+																										type="number"
+																										min={1}
+																										max={item.quantity}
+																										value={draft.constatada_quantity}
+																										onChange={(e) =>
+																											setItemVisitResults((prev) => ({
+																												...prev,
+																												[item.id]: {
+																													result: 'constatada',
+																													constatada_quantity:
+																														parseInt(e.target.value, 10) || 1,
+																												},
+																											}))
+																										}
+																										className="w-28 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300"
+																									/>
+																								</div>
+																							)}
+																						</div>
+																					);
+																				})}
+																				<textarea
+																					rows={2}
+																					placeholder="Parecer técnico geral (opcional)…"
+																					value={visitFindings}
+																					onChange={(e) => setVisitFindings(e.target.value)}
+																					className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none"
+																				/>
+																				<div className="flex gap-2">
+																					<button
+																						onClick={resetCompletingVisit}
+																						className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+																					>
+																						Cancelar
+																					</button>
+																					<button
+																						onClick={() => handleCompleteVisit(v.id)}
+																						disabled={
+																							isActing ||
+																							(request.items || []).some(
+																								(item) => !itemVisitResults[item.id]?.result,
+																							)
+																						}
+																						className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60"
+																					>
+																						{isActing ? 'Salvando…' : 'Salvar'}
+																					</button>
+																				</div>
+																			</div>
+																		) : isRegisteringFrustrated ? (
+																			<div className="space-y-3">
+																				<p className="text-xs font-semibold text-orange-700 uppercase tracking-wide">
+																					Registrar visita frustrada
+																				</p>
+																				<p className="text-xs text-gray-500">
+																					Use quando não foi possível verificar a necessidade in loco.
+																					Após salvar, você poderá agendar uma nova visita.
+																				</p>
+																				<textarea
+																					rows={3}
+																					placeholder="Descreva o motivo da frustração da visita (obrigatório)…"
+																					value={frustratedReason}
+																					onChange={(e) => setFrustratedReason(e.target.value)}
+																					className="w-full px-2 py-1.5 text-xs border border-orange-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-orange-300 resize-none"
+																				/>
+																				<div className="flex gap-2">
+																					<button
+																						onClick={resetCompletingVisit}
+																						className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+																					>
+																						Cancelar
+																					</button>
+																					<button
+																						onClick={() => handleCompleteFrustratedVisit(v.id)}
+																						disabled={isActing || !frustratedReason.trim()}
+																						className="flex-1 py-1.5 text-xs bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-60"
+																					>
+																						{isActing ? 'Salvando…' : 'Registrar frustrada'}
+																					</button>
+																				</div>
+																			</div>
+																		) : (
+																			<div className="flex flex-wrap gap-3">
+																				<button
+																					onClick={() => {
+																						setItemVisitResults(initItemVisitDraft());
+																						setCompletingVisitId(v.id);
+																						setCompletingVisitMode('itens');
+																					}}
+																					className="text-xs text-purple-600 hover:underline font-medium"
+																				>
+																					Registrar resultado
+																				</button>
+																				<button
+																					onClick={() => {
+																						setCompletingVisitId(v.id);
+																						setCompletingVisitMode('frustrada');
+																						setFrustratedReason('');
+																					}}
+																					className="text-xs text-orange-600 hover:underline font-medium"
+																				>
+																					Visita frustrada
+																				</button>
+																			</div>
+																		)
+																	) : v.result === 'frustrada' ? (
+																		<div className="space-y-2">
+																			<p className="text-xs text-orange-800 font-medium">
+																				Verificação não realizada in loco.
+																			</p>
+																			{v.findings && (
+																				<p className="text-xs text-gray-600">
+																					<span className="font-medium">Motivo:</span> {v.findings}
+																				</p>
+																			)}
+																		</div>
+																	) : isEditingResult ? (
+																		<div className="space-y-3">
+																			<p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+																				Corrigir resultado por equipamento
+																			</p>
+																			{(request.items || []).map((item) => {
+																				const draft = editItemVisitResults[item.id] || {
+																					result: '' as const,
+																					constatada_quantity: item.quantity,
+																				};
+																				return (
 																					<div key={item.id} className="border border-gray-200 rounded-lg p-2 space-y-1.5">
 																						<p className="text-xs font-medium text-gray-700">
-																							{itemLabel(item)} · × {item.quantity}
+																							{itemLabel(item)}
+																							<span className="text-gray-500 font-normal ml-2">
+																								Solicitado: × {item.quantity}
+																							</span>
 																						</p>
 																						<div className="flex gap-2">
 																							{[
@@ -1246,13 +1501,17 @@ const RequestDetail = ({
 																									key={opt.value}
 																									type="button"
 																									onClick={() =>
-																										setItemVisitResults((prev) => ({
+																										setEditItemVisitResults((prev) => ({
 																											...prev,
-																											[item.id]: opt.value as VisitItemResultValue,
+																											[item.id]: {
+																												result: opt.value as VisitItemResultValue,
+																												constatada_quantity:
+																													prev[item.id]?.constatada_quantity || item.quantity,
+																											},
 																										}))
 																									}
 																									className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
-																										itemVisitResults[item.id] === opt.value
+																										draft.result === opt.value
 																											? 'border-purple-500 bg-purple-50 text-purple-700'
 																											: 'border-gray-200 text-gray-600'
 																									}`}
@@ -1261,89 +1520,33 @@ const RequestDetail = ({
 																								</button>
 																							))}
 																						</div>
+																						{draft.result === 'constatada' && (
+																							<div>
+																								<label className="text-xs text-gray-600 mb-1 block">
+																									Quantidade com necessidade constatada
+																								</label>
+																								<input
+																									type="number"
+																									min={1}
+																									max={item.quantity}
+																									value={draft.constatada_quantity}
+																									onChange={(e) =>
+																										setEditItemVisitResults((prev) => ({
+																											...prev,
+																											[item.id]: {
+																												result: 'constatada',
+																												constatada_quantity:
+																													parseInt(e.target.value, 10) || 1,
+																											},
+																										}))
+																									}
+																									className="w-28 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300"
+																								/>
+																							</div>
+																						)}
 																					</div>
-																				))}
-																				<textarea
-																					rows={2}
-																					placeholder="Parecer técnico geral (opcional)…"
-																					value={visitFindings}
-																					onChange={(e) => setVisitFindings(e.target.value)}
-																					className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none"
-																				/>
-																				<div className="flex gap-2">
-																					<button
-																						onClick={() => {
-																							setCompletingVisitId(null)
-																							setItemVisitResults({})
-																							setVisitFindings('')
-																						}}
-																						className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
-																					>
-																						Cancelar
-																					</button>
-																					<button
-																						onClick={() => handleCompleteVisit(v.id)}
-																						disabled={
-																							isActing ||
-																							(request.items || []).some((item) => !itemVisitResults[item.id])
-																						}
-																						className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60"
-																					>
-																						{isActing ? 'Salvando…' : 'Salvar'}
-																					</button>
-																				</div>
-																			</div>
-																		) : (
-																			<button
-																				onClick={() => {
-																					const draft: ItemVisitDraft = {}
-																					;(request.items || []).forEach((item) => {
-																						draft[item.id] = ''
-																					})
-																					setItemVisitResults(draft)
-																					setCompletingVisitId(v.id)
-																				}}
-																				className="text-xs text-purple-600 hover:underline font-medium"
-																			>
-																				Registrar resultado
-																			</button>
-																		)
-																	) : isEditingResult ? (
-																		<div className="space-y-3">
-																			<p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-																				Corrigir resultado por equipamento
-																			</p>
-																			{(request.items || []).map((item) => (
-																				<div key={item.id} className="border border-gray-200 rounded-lg p-2 space-y-1.5">
-																					<p className="text-xs font-medium text-gray-700">
-																						{itemLabel(item)} · × {item.quantity}
-																					</p>
-																					<div className="flex gap-2">
-																						{[
-																							{ value: 'constatada', label: 'Constatada' },
-																							{ value: 'nao_constatada', label: 'Não constatada' },
-																						].map((opt) => (
-																							<button
-																								key={opt.value}
-																								type="button"
-																								onClick={() =>
-																									setEditItemVisitResults((prev) => ({
-																										...prev,
-																										[item.id]: opt.value as VisitItemResultValue,
-																									}))
-																								}
-																								className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
-																									editItemVisitResults[item.id] === opt.value
-																										? 'border-purple-500 bg-purple-50 text-purple-700'
-																										: 'border-gray-200 text-gray-600'
-																								}`}
-																							>
-																								{opt.label}
-																							</button>
-																						))}
-																					</div>
-																				</div>
-																			))}
+																				);
+																			})}
 																			<textarea
 																				rows={2}
 																				placeholder="Parecer técnico geral (opcional)…"
@@ -1354,9 +1557,9 @@ const RequestDetail = ({
 																			<div className="flex gap-2">
 																				<button
 																					onClick={() => {
-																						setEditingVisitResultId(null)
-																						setEditItemVisitResults({})
-																						setEditVisitFindings('')
+																						setEditingVisitResultId(null);
+																						setEditItemVisitResults({});
+																						setEditVisitFindings('');
 																					}}
 																					className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
 																				>
@@ -1366,7 +1569,9 @@ const RequestDetail = ({
 																					onClick={() => handleUpdateVisitResult(v.id)}
 																					disabled={
 																						isActing ||
-																						(request.items || []).some((item) => !editItemVisitResults[item.id])
+																						(request.items || []).some(
+																							(item) => !editItemVisitResults[item.id]?.result,
+																						)
 																					}
 																					className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60"
 																				>
@@ -1388,7 +1593,7 @@ const RequestDetail = ({
 																							}`}
 																						>
 																							{item.visit_result.result === 'constatada'
-																								? 'Constatada'
+																								? `Constatada × ${item.visit_result.constatada_quantity ?? item.quantity}`
 																								: 'Não constatada'}
 																						</span>
 																					</div>
@@ -1400,13 +1605,17 @@ const RequestDetail = ({
 																			{canEditVisitResult && (
 																				<button
 																					onClick={() => {
-																						const draft: ItemVisitDraft = {}
-																						;(request.items || []).forEach((item) => {
-																							draft[item.id] = item.visit_result?.result || ''
-																						})
-																						setEditItemVisitResults(draft)
-																						setEditVisitFindings(v.findings || '')
-																						setEditingVisitResultId(v.id)
+																						const draft: ItemVisitDraft = {};
+																						(request.items || []).forEach((item) => {
+																							draft[item.id] = {
+																								result: item.visit_result?.result || '',
+																								constatada_quantity:
+																									item.visit_result?.constatada_quantity || item.quantity,
+																							};
+																						});
+																						setEditItemVisitResults(draft);
+																						setEditVisitFindings(v.findings || '');
+																						setEditingVisitResultId(v.id);
 																					}}
 																					className="text-xs text-purple-500 hover:text-purple-700 hover:underline"
 																				>

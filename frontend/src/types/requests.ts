@@ -27,6 +27,7 @@ export interface ItemVisitResult {
   visit_id: number
   result: VisitItemResultValue
   findings?: string | null
+  constatada_quantity?: number | null
 }
 
 export interface ItemDeliberation {
@@ -97,7 +98,7 @@ export interface TechnicalVisit {
   assigned_to_name?: string | null
   scheduled_date?: string | null
   scheduled_time?: string | null
-  result?: 'constatada' | 'nao_constatada' | null
+  result?: 'constatada' | 'nao_constatada' | 'frustrada' | null
   findings?: string | null
   completed_by?: number | null
   completed_by_name?: string | null

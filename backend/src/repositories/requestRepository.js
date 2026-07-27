@@ -340,6 +340,7 @@ async function findCatalogItemsByRequestId(pool, requestId) {
             latest_visit.visit_id       AS visit_result_visit_id,
             latest_visit.result         AS visit_result,
             latest_visit.findings       AS visit_result_findings,
+            latest_visit.constatada_quantity AS visit_constatada_quantity,
             rid.decision                AS deliberation_decision,
             rid.approved_quantity       AS deliberation_approved_quantity,
             rid.notes                   AS deliberation_notes,
@@ -350,7 +351,7 @@ async function findCatalogItemsByRequestId(pool, requestId) {
      LEFT JOIN catalog_brands cb ON cb.id = rci.brand_id
      LEFT JOIN catalog_models  cm ON cm.id = rci.model_id
      LEFT JOIN LATERAL (
-       SELECT tvir.visit_id, tvir.result, tvir.findings
+       SELECT tvir.visit_id, tvir.result, tvir.findings, tvir.constatada_quantity
        FROM technical_visit_item_results tvir
        JOIN technical_visits tv ON tv.id = tvir.visit_id
        WHERE tvir.catalog_item_id = rci.id
@@ -383,6 +384,7 @@ async function findCatalogItemsByRequestId(pool, requestId) {
           visit_id: row.visit_result_visit_id,
           result: row.visit_result,
           findings: row.visit_result_findings,
+          constatada_quantity: row.visit_constatada_quantity,
         }
       : null,
     deliberation: row.deliberation_decision
@@ -400,11 +402,21 @@ async function findCatalogItemsByRequestId(pool, requestId) {
 async function upsertVisitItemResults(client, visitId, itemResults) {
   for (const item of itemResults) {
     await client.query(
-      `INSERT INTO technical_visit_item_results (visit_id, catalog_item_id, result, findings)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO technical_visit_item_results
+         (visit_id, catalog_item_id, result, findings, constatada_quantity)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (visit_id, catalog_item_id)
-       DO UPDATE SET result = EXCLUDED.result, findings = EXCLUDED.findings`,
-      [visitId, item.catalog_item_id, item.result, item.findings || null]
+       DO UPDATE SET
+         result = EXCLUDED.result,
+         findings = EXCLUDED.findings,
+         constatada_quantity = EXCLUDED.constatada_quantity`,
+      [
+        visitId,
+        item.catalog_item_id,
+        item.result,
+        item.findings || null,
+        item.constatada_quantity ?? null,
+      ]
     )
   }
 }

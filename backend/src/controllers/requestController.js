@@ -104,7 +104,16 @@ async function scheduleTechnicalVisit(req, res, pool, logAudit) {
 async function completeTechnicalVisit(req, res, pool, logAudit) {
   try {
     const visitId = parseInt(req.params.visitId)
-    const { item_results, findings, result } = req.body
+    const { item_results, findings, result, outcome, reason } = req.body
+
+    if (outcome === 'frustrada' || result === 'frustrada') {
+      const data = await service.completeFrustratedTechnicalVisit(
+        pool, visitId, reason || findings, req.user.id
+      )
+      await logAudit(req.user.id, 'technical_visit_frustrated', 'technical_visits', visitId,
+        { request_id: data.request_id, reason: reason || findings }, req.ip)
+      return res.status(200).json(data)
+    }
 
     // Compatibilidade: resultado único antigo → aplica a todos os itens
     let itemResults = item_results
@@ -114,6 +123,7 @@ async function completeTechnicalVisit(req, res, pool, logAudit) {
         catalog_item_id: item.id,
         result,
         findings: findings || null,
+        constatada_quantity: result === 'constatada' ? item.quantity : null,
       }))
     }
 
@@ -126,7 +136,8 @@ async function completeTechnicalVisit(req, res, pool, logAudit) {
       err.message.includes('não encontrada') ? 404 :
       err.message.includes('obrigatório') || err.message.includes('concluída') ||
       err.message.includes('disponível') || err.message.includes('inválid') ||
-      err.message.includes('equipamento') ? 400 : 500
+      err.message.includes('equipamento') || err.message.includes('Quantidade') ||
+      err.message.includes('frustrada') ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }
@@ -158,6 +169,7 @@ async function updateVisitResult(req, res, pool, logAudit) {
         catalog_item_id: item.id,
         result,
         findings: findings || null,
+        constatada_quantity: result === 'constatada' ? item.quantity : null,
       }))
     }
 

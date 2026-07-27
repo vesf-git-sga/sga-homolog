@@ -50,10 +50,13 @@ export interface UpdateVisitSchedulePayload {
 }
 
 export interface CompleteVisitPayload {
-  item_results: Array<{
+  outcome?: 'frustrada'
+  reason?: string
+  item_results?: Array<{
     catalog_item_id: number
     result: 'constatada' | 'nao_constatada'
     findings?: string
+    constatada_quantity?: number | null
   }>
   findings?: string
 }
@@ -63,6 +66,7 @@ export interface UpdateVisitResultPayload {
     catalog_item_id: number
     result: 'constatada' | 'nao_constatada'
     findings?: string
+    constatada_quantity?: number | null
   }>
   findings?: string
 }

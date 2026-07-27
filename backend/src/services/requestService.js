@@ -107,10 +107,57 @@ function aggregateDeliberationStatus(decisions) {
   return 'parcialmente_aprovado'
 }
 
-function summarizeVisitResults(itemResults) {
+function summarizeVisitResults(itemResults, itemsById) {
+  const parts = itemResults.map((i) => {
+    const item = itemsById?.get?.(i.catalog_item_id)
+    const label = item?.item_type_name || `Item #${i.catalog_item_id}`
+    if (i.result === 'constatada') {
+      return `${label}: constatada (qtd ${i.constatada_quantity})`
+    }
+    return `${label}: não constatada`
+  })
   const constatados = itemResults.filter((i) => i.result === 'constatada').length
   const naoConstatados = itemResults.length - constatados
-  return `Visita concluída por equipamento: ${constatados} necessidade(s) constatada(s), ${naoConstatados} não constatada(s).`
+  return `Visita concluída por equipamento (${constatados} constatada(s), ${naoConstatados} não constatada(s)). ${parts.join('; ')}.`
+}
+
+function validateItemVisitResults(itemResults, catalogItems) {
+  const itemsById = new Map(catalogItems.map((i) => [i.id, i]))
+  const normalized = []
+  for (const item of itemResults) {
+    if (!item.catalog_item_id || !['constatada', 'nao_constatada'].includes(item.result)) {
+      throw new Error('Resultado inválido: use "constatada" ou "nao_constatada" por equipamento.')
+    }
+    const catalogItem = itemsById.get(item.catalog_item_id)
+    if (!catalogItem) {
+      throw new Error(`Equipamento #${item.catalog_item_id} não pertence à solicitação.`)
+    }
+    if (item.result === 'constatada') {
+      const qty = parseInt(item.constatada_quantity, 10)
+      if (!qty || qty < 1) {
+        throw new Error(`Quantidade constatada inválida para "${catalogItem.item_type_name}".`)
+      }
+      if (qty > catalogItem.quantity) {
+        throw new Error(
+          `Quantidade constatada (${qty}) não pode exceder a solicitada (${catalogItem.quantity}) em "${catalogItem.item_type_name}".`
+        )
+      }
+      normalized.push({
+        catalog_item_id: item.catalog_item_id,
+        result: item.result,
+        findings: item.findings || null,
+        constatada_quantity: qty,
+      })
+    } else {
+      normalized.push({
+        catalog_item_id: item.catalog_item_id,
+        result: item.result,
+        findings: item.findings || null,
+        constatada_quantity: null,
+      })
+    }
+  }
+  return normalized
 }
 
 function summarizeDeliberations(decisions, itemsById) {
@@ -285,13 +332,41 @@ async function scheduleTechnicalVisit(pool, requestId, data, currentUserId) {
     throw new Error('Já existe uma visita técnica pendente para esta solicitação. Conclua-a antes de agendar outra.')
   }
 
-  return repository.createTechnicalVisit(pool, {
+  const visit = await repository.createTechnicalVisit(pool, {
     request_id:     requestId,
     assigned_to:    data.assigned_to || null,
     scheduled_date: data.scheduled_date || null,
     scheduled_time: data.scheduled_time || null,
     created_by:     currentUserId,
   })
+
+  const lastFrustrada = await pool.query(
+    `SELECT id, findings, completed_at FROM technical_visits
+     WHERE request_id = $1 AND result = 'frustrada' AND completed_at IS NOT NULL
+     ORDER BY completed_at DESC LIMIT 1`,
+    [requestId]
+  )
+  if (lastFrustrada.rows.length > 0) {
+    const scheduleParts = []
+    if (data.scheduled_date) {
+      const d = new Date(data.scheduled_date).toLocaleDateString('pt-BR')
+      scheduleParts.push(`data ${d}`)
+    }
+    if (data.scheduled_time) scheduleParts.push(`horário ${data.scheduled_time}`)
+    const when = scheduleParts.length > 0 ? scheduleParts.join(', ') : 'sem data definida'
+    const motivoAnterior = lastFrustrada.rows[0].findings || 'não informado'
+    await pool.query(
+      `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+       VALUES ($1, 'visita_tecnica_solicitada', 'visita_tecnica_solicitada', $2, $3)`,
+      [
+        requestId,
+        `Nova visita técnica agendada (${when}) após visita frustrada. Motivo anterior: ${motivoAnterior}`,
+        currentUserId,
+      ]
+    )
+  }
+
+  return visit
 }
 
 async function updateVisitSchedule(pool, visitId, data, currentUserId) {
@@ -323,17 +398,15 @@ async function updateVisitResult(pool, visitId, itemResults, findings, currentUs
   if (!Array.isArray(itemResults) || itemResults.length === 0) {
     throw new Error('Informe o resultado por equipamento.')
   }
-  for (const item of itemResults) {
-    if (!item.catalog_item_id || !['constatada', 'nao_constatada'].includes(item.result)) {
-      throw new Error('Resultado inválido: use "constatada" ou "nao_constatada" por equipamento.')
-    }
-  }
 
   const visitRes = await pool.query(
     'SELECT * FROM technical_visits WHERE id = $1', [visitId]
   )
   if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
   if (!visitRes.rows[0].completed_at) throw new Error('A visita ainda não foi concluída.')
+  if (visitRes.rows[0].result === 'frustrada') {
+    throw new Error('Visitas frustradas não permitem correção de resultado por equipamento.')
+  }
 
   const requestId = visitRes.rows[0].request_id
   const reqRes = await pool.query(
@@ -352,20 +425,23 @@ async function updateVisitResult(pool, visitId, itemResults, findings, currentUs
     throw new Error('É obrigatório informar o resultado para todos os equipamentos da solicitação.')
   }
 
+  const normalized = validateItemVisitResults(itemResults, catalogItems)
+  const itemsById = new Map(catalogItems.map((i) => [i.id, i]))
+
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    await repository.upsertVisitItemResults(client, visitId, itemResults)
+    await repository.upsertVisitItemResults(client, visitId, normalized)
 
-    const allSame = itemResults.every((i) => i.result === itemResults[0].result)
+    const allSame = normalized.every((i) => i.result === normalized[0].result)
     await client.query(
       `UPDATE technical_visits
        SET result = $1, findings = $2
        WHERE id = $3`,
-      [allSame ? itemResults[0].result : null, findings || null, visitId]
+      [allSame ? normalized[0].result : null, findings || null, visitId]
     )
 
-    const newStatus = aggregateVisitStatus(itemResults)
+    const newStatus = aggregateVisitStatus(normalized)
     const oldStatus = reqRes.rows[0].status
     if (DELIBERATION_STATUSES.includes(oldStatus) && oldStatus !== newStatus) {
       await client.query(
@@ -375,7 +451,7 @@ async function updateVisitResult(pool, visitId, itemResults, findings, currentUs
       await client.query(
         `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
          VALUES ($1, $2, $3, $4, $5)`,
-        [requestId, oldStatus, newStatus, summarizeVisitResults(itemResults) + ' (resultado corrigido)', currentUserId]
+        [requestId, oldStatus, newStatus, summarizeVisitResults(normalized, itemsById) + ' (resultado corrigido)', currentUserId]
       )
     }
 
@@ -393,11 +469,6 @@ async function completeTechnicalVisit(pool, visitId, itemResults, findings, curr
   if (!Array.isArray(itemResults) || itemResults.length === 0) {
     throw new Error('Resultado da visita é obrigatório por equipamento.')
   }
-  for (const item of itemResults) {
-    if (!item.catalog_item_id || !['constatada', 'nao_constatada'].includes(item.result)) {
-      throw new Error('Resultado da visita é obrigatório: "constatada" ou "nao_constatada" por equipamento.')
-    }
-  }
 
   const client = await pool.connect()
   try {
@@ -412,19 +483,25 @@ async function completeTechnicalVisit(pool, visitId, itemResults, findings, curr
     if (visit.completed_at) throw new Error('Esta visita já foi concluída.')
 
     const itemsRes = await client.query(
-      'SELECT id FROM request_catalog_items WHERE request_id = $1',
+      `SELECT rci.id, rci.quantity, it.name AS item_type_name
+       FROM request_catalog_items rci
+       JOIN item_types it ON it.id = rci.item_type_id
+       WHERE rci.request_id = $1`,
       [visit.request_id]
     )
-    const catalogIds = new Set(itemsRes.rows.map((r) => r.id))
+    const catalogItems = itemsRes.rows
+    const catalogIds = new Set(catalogItems.map((r) => r.id))
     const payloadIds = new Set(itemResults.map((i) => i.catalog_item_id))
     if (catalogIds.size === 0) throw new Error('A solicitação não possui equipamentos.')
     if (catalogIds.size !== payloadIds.size || [...catalogIds].some((id) => !payloadIds.has(id))) {
       throw new Error('É obrigatório informar o resultado para todos os equipamentos da solicitação.')
     }
 
-    const allSame = itemResults.every((i) => i.result === itemResults[0].result)
-    const aggregatedResult = allSame ? itemResults[0].result : null
-    const newStatus = aggregateVisitStatus(itemResults)
+    const normalized = validateItemVisitResults(itemResults, catalogItems)
+    const itemsById = new Map(catalogItems.map((i) => [i.id, i]))
+    const allSame = normalized.every((i) => i.result === normalized[0].result)
+    const aggregatedResult = allSame ? normalized[0].result : null
+    const newStatus = aggregateVisitStatus(normalized)
 
     await client.query(
       `UPDATE technical_visits
@@ -433,7 +510,7 @@ async function completeTechnicalVisit(pool, visitId, itemResults, findings, curr
       [aggregatedResult, findings || null, currentUserId, visitId]
     )
 
-    await repository.upsertVisitItemResults(client, visitId, itemResults)
+    await repository.upsertVisitItemResults(client, visitId, normalized)
 
     await client.query(
       `UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2`,
@@ -445,7 +522,7 @@ async function completeTechnicalVisit(pool, visitId, itemResults, findings, curr
       [
         visit.request_id,
         newStatus,
-        summarizeVisitResults(itemResults) + (findings ? ` Parecer geral: ${findings}` : ''),
+        summarizeVisitResults(normalized, itemsById) + (findings ? ` Parecer geral: ${findings}` : ''),
         currentUserId,
       ]
     )
@@ -455,7 +532,74 @@ async function completeTechnicalVisit(pool, visitId, itemResults, findings, curr
       visit_id: visitId,
       request_id: visit.request_id,
       status: newStatus,
-      item_results: itemResults,
+      item_results: normalized,
+    }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+async function completeFrustratedTechnicalVisit(pool, visitId, reason, currentUserId) {
+  if (!reason?.trim()) {
+    throw new Error('O motivo da visita frustrada é obrigatório.')
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const visitRes = await client.query(
+      'SELECT * FROM technical_visits WHERE id = $1 FOR UPDATE',
+      [visitId]
+    )
+    if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
+    const visit = visitRes.rows[0]
+    if (visit.completed_at) throw new Error('Esta visita já foi concluída.')
+
+    const reqRes = await client.query(
+      'SELECT status FROM requests WHERE id = $1 FOR UPDATE',
+      [visit.request_id]
+    )
+    if (reqRes.rows.length === 0) throw new Error('Solicitação não encontrada.')
+    if (reqRes.rows[0].status !== 'visita_tecnica_solicitada') {
+      throw new Error('Visita frustrada só pode ser registrada enquanto a visita técnica está em andamento.')
+    }
+
+    const scheduleInfo = []
+    if (visit.scheduled_date) {
+      scheduleInfo.push(`Data agendada: ${new Date(visit.scheduled_date).toLocaleDateString('pt-BR')}`)
+    }
+    if (visit.scheduled_time) scheduleInfo.push(`Horário: ${visit.scheduled_time}`)
+
+    await client.query(
+      `UPDATE technical_visits
+       SET result = 'frustrada', findings = $1, completed_by = $2, completed_at = NOW()
+       WHERE id = $3`,
+      [reason.trim(), currentUserId, visitId]
+    )
+
+    const historyNotes = [
+      'Visita técnica frustrada — verificação não realizada in loco.',
+      `Motivo: ${reason.trim()}`,
+      ...scheduleInfo,
+      'Uma nova visita técnica poderá ser agendada.',
+    ].join(' ')
+
+    await client.query(
+      `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+       VALUES ($1, 'visita_tecnica_solicitada', 'visita_tecnica_solicitada', $2, $3)`,
+      [visit.request_id, historyNotes, currentUserId]
+    )
+
+    await client.query('COMMIT')
+    return {
+      visit_id: visitId,
+      request_id: visit.request_id,
+      status: 'visita_tecnica_solicitada',
+      outcome: 'frustrada',
     }
   } catch (err) {
     await client.query('ROLLBACK')
@@ -652,6 +796,7 @@ module.exports = {
   updateVisitSchedule,
   updateVisitResult,
   completeTechnicalVisit,
+  completeFrustratedTechnicalVisit,
   submitItemDeliberations,
   updateRequestFromMovement,
   findApprovedRequest,
