@@ -26,13 +26,14 @@ interface Props {
 	onSave: (personData: PersonFormData, id?: number) => Promise<void>
 	person?: (PersonFormData & { id: number }) | null
 	units: PeopleModalUnit[]
+	defaultEmail?: string
 }
 
-const PeopleModal = ({ onClose, onSave, person, units }: Props) => {
+const PeopleModal = ({ onClose, onSave, person, units, defaultEmail }: Props) => {
 	const [fullName, setFullName] = useState(person?.full_name || '')
 	const [registrationNumber, setRegistrationNumber] = useState(person?.registration_number || '')
 	const [cpf, setCpf] = useState(person?.cpf || '')
-	const [email, setEmail] = useState(person?.email || '')
+	const [email, setEmail] = useState(person?.email || defaultEmail || '')
 	const [contactPhone, setContactPhone] = useState(person?.contact_phone || '')
 	const [jobTitle, setJobTitle] = useState(person?.job_title || '')
 	const [selectedUnitType, setSelectedUnitType] = useState<'ADMINISTRATIVA' | 'ESCOLAR' | 'EXTERNA' | ''>('')

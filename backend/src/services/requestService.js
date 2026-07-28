@@ -11,8 +11,10 @@ const VALID_TYPES = ['emprestimo', 'substituicao', 'acrescimo']
 const CHANNELS_BY_TYPE = {
   emprestimo:   ['email', 'sei'],
   substituicao: ['chamado', 'sei', 'email'],
-  acrescimo:    ['sei', 'email'],
+  acrescimo:    ['sei', 'email', 'educagestor'],
 }
+
+const EDUCAGESTOR_PROTOCOL_RE = /^\d{9}$/
 
 // ─── Máquina de estados ────────────────────────────────────────────────────
 //
@@ -126,6 +128,16 @@ async function createRequest(pool, data, currentUserId, oficioPath, oficioOrigin
 
   if (data.input_channel === 'sei' && !data.input_channel_details) {
     throw new Error('Número do processo SEI é obrigatório.')
+  }
+  if (data.input_channel === 'educagestor') {
+    const protocol = (data.input_channel_details || '').replace(/\D/g, '')
+    data.input_channel_details = protocol
+    if (!protocol) {
+      throw new Error('Protocolo da Ocorrência (EducaGestor) é obrigatório.')
+    }
+    if (!EDUCAGESTOR_PROTOCOL_RE.test(protocol)) {
+      throw new Error('Protocolo da Ocorrência inválido. Informe 9 dígitos numéricos.')
+    }
   }
   if (data.input_channel === 'chamado' && !data.input_channel_details) {
     throw new Error('Número do chamado é obrigatório.')

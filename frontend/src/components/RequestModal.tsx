@@ -32,6 +32,7 @@ function getChannelOptions(
 		return [
 			{ value: 'sei', label: 'SEI' },
 			{ value: 'email', label: 'E-mail' },
+			{ value: 'educagestor', label: 'EducaGestor' },
 		];
 	if (type === 'substituicao') {
 		return fundamentacao === 'avaria' ?
@@ -122,6 +123,9 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 	// ── Número do chamado para avaria via e-mail ──────────────────────────
 	const [avariaChomadoNumber, setAvariaChomadoNumber] = useState('');
 
+	// ── E-mail do solicitante (canal EducaGestor) ───────────────────────
+	const [educagestorEmail, setEducagestorEmail] = useState('');
+
 	// ── Ofício ────────────────────────────────────────────────────────────
 	const [oficioFile, setOficioFile] = useState<File | null>(null);
 
@@ -158,21 +162,27 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 		setInputChannel('');
 		setChannelDetails('');
 		setAvariaChomadoNumber('');
+		setEducagestorEmail('');
 	}, [type, fundamentacao]);
 
 	useEffect(() => {
 		setChannelDetails('');
+		setEducagestorEmail('');
 		setEmailPrefilled(false);
 		setAvariaChomadoNumber('');
 	}, [inputChannel]);
 
-	// Pré-preenchimento automático quando canal = e-mail e endereço bate com cadastro
+	// Pré-preenchimento automático pelo e-mail (canais e-mail e EducaGestor)
 	useEffect(() => {
-		if (inputChannel !== 'email') {
+		if (inputChannel !== 'email' && inputChannel !== 'educagestor') {
 			setEmailPrefilled(false);
 			return;
 		}
-		const emailVal = channelDetails.trim().toLowerCase();
+		const emailVal = (
+			inputChannel === 'email' ? channelDetails : educagestorEmail
+		)
+			.trim()
+			.toLowerCase();
 		if (!emailVal.includes('@')) return;
 		const match = people.find(
 			(p) => p.email?.toLowerCase() === emailVal,
@@ -181,9 +191,12 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 			setSelectedPerson({ id: match.id, full_name: match.full_name });
 			setPersonSearch(match.full_name);
 			setEmailPrefilled(true);
-			if (match.unit_id) setSelectedUnitId(match.unit_id);
+			if (match.unit_id) {
+				setSelectedUnitId(match.unit_id);
+				setPersonUnitPrefilled(true);
+			}
 		}
-	}, [channelDetails, inputChannel, people]);
+	}, [channelDetails, educagestorEmail, inputChannel, people]);
 
 	// Carrega marcas ao selecionar tipo de item no staging
 	useEffect(() => {
@@ -382,6 +395,23 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 			);
 			return;
 		}
+		if (
+			inputChannel === 'educagestor' &&
+			channelDetails.replace(/\D/g, '').length === 0
+		) {
+			addToast('Informe o protocolo da ocorrência.', 'error');
+			return;
+		}
+		if (
+			inputChannel === 'educagestor' &&
+			! /^\d{9}$/.test(channelDetails.replace(/\D/g, ''))
+		) {
+			addToast(
+				'Protocolo da Ocorrência inválido. Informe 9 dígitos numéricos.',
+				'error',
+			);
+			return;
+		}
 		const chamadoParaAvaria =
 			inputChannel === 'email' ? avariaChomadoNumber : channelDetails;
 		if (fundamentacao === 'avaria' && !chamadoParaAvaria.trim()) {
@@ -408,7 +438,9 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 		const detailsToSend =
 			fundamentacao === 'avaria' && inputChannel === 'email'
 				? avariaChomadoNumber.trim()
-				: channelDetails.trim();
+				: inputChannel === 'educagestor'
+					? channelDetails.replace(/\D/g, '')
+					: channelDetails.trim();
 		if (detailsToSend)
 			formData.append('input_channel_details', detailsToSend);
 		if (fundamentacao) formData.append('fundamentacao', fundamentacao);
@@ -443,6 +475,19 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 
 	const channelOptions = getChannelOptions(type, fundamentacao);
 	const documentoLabel = fundamentacao === 'avaria' ? 'Laudo' : 'Ofício';
+	const solicitanteEmailForLookup =
+		inputChannel === 'educagestor' ? educagestorEmail
+		: inputChannel === 'email' ? channelDetails
+		: '';
+	const solicitanteEmailNotFound =
+		(inputChannel === 'educagestor' || inputChannel === 'email') &&
+		solicitanteEmailForLookup.trim().includes('@') &&
+		!people.some(
+			(p) =>
+				p.email?.toLowerCase() ===
+				solicitanteEmailForLookup.trim().toLowerCase(),
+		);
+	const newPersonDefaultEmail = solicitanteEmailForLookup.trim();
 
 	// ─── Render ───────────────────────────────────────────────────────────────
 	return (
@@ -589,6 +634,12 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 											}
 											className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
 										/>
+										{solicitanteEmailNotFound && (
+											<p className="text-xs text-amber-600">
+												E-mail não encontrado no cadastro. Utilize
+												&quot;Cadastrar novo solicitante&quot; abaixo.
+											</p>
+										)}
 										{fundamentacao === 'avaria' && (
 											<input
 												type="text"
@@ -597,6 +648,43 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 												onChange={(e) => setAvariaChomadoNumber(e.target.value)}
 												className="w-full px-3 py-2 text-sm border border-orange-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-300 bg-orange-50"
 											/>
+										)}
+									</div>
+								)}
+								{inputChannel === 'educagestor' && (
+									<div className="mt-2 space-y-2">
+										<InputMask
+											mask="999999999"
+											value={channelDetails}
+											onChange={(e) =>
+												setChannelDetails(e.target.value)
+											}
+										>
+											{(inputProps: any) => (
+												<input
+													{...inputProps}
+													type="text"
+													placeholder="Protocolo da Ocorrência (EducaGestor)"
+													className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
+												/>
+											)}
+										</InputMask>
+										<input
+											type="text"
+											placeholder="E-mail do solicitante"
+											value={educagestorEmail}
+											onChange={(e) => {
+												setEducagestorEmail(e.target.value);
+												setEmailPrefilled(false);
+												setPersonUnitPrefilled(false);
+											}}
+											className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
+										/>
+										{solicitanteEmailNotFound && (
+											<p className="text-xs text-amber-600">
+												E-mail não encontrado no cadastro. Utilize
+												&quot;Cadastrar novo solicitante&quot; abaixo.
+											</p>
 										)}
 									</div>
 								)}
@@ -1071,6 +1159,7 @@ const RequestModal = ({ onClose, onCreated }: RequestModalProps) => {
 				<PeopleModal
 					person={null}
 					units={units}
+					defaultEmail={newPersonDefaultEmail || undefined}
 					onClose={() => setShowNewPersonModal(false)}
 					onSave={handleSaveNewPerson}
 				/>

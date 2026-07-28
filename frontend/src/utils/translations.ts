@@ -48,9 +48,10 @@ export const REQUEST_STATUS_LABELS: Record<string, string> = {
 }
 
 export const REQUEST_CHANNEL_LABELS: Record<string, string> = {
-  email:   'E-mail',
-  sei:     'SEI',
-  chamado: 'Chamado',
+  email:       'E-mail',
+  sei:         'SEI',
+  chamado:     'Chamado',
+  educagestor: 'EducaGestor',
 }
 
 // Função para traduzir os tipos de ações de auditoria

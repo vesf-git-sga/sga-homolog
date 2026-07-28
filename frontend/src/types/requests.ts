@@ -12,7 +12,7 @@ export type RequestStatus =
   | 'cancelado'
   | 'indisponivel_estoque'
 
-export type InputChannel = 'email' | 'sei' | 'chamado'
+export type InputChannel = 'email' | 'sei' | 'chamado' | 'educagestor'
 
 export interface CatalogBrand { id: number; name: string }
 export interface CatalogModel { id: number; name: string; brand_id: number; item_type_id: number }
