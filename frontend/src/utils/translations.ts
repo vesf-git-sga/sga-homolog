@@ -35,16 +35,18 @@ export const REQUEST_TYPE_LABELS: Record<string, string> = {
 }
 
 export const REQUEST_STATUS_LABELS: Record<string, string> = {
-  requisitado:               'Requisitado',
-  visita_tecnica_solicitada: 'Visita Técnica Solicitada',
-  visita_realizada:          'Visita Realizada',
-  aguardando_aprovacao:      'Aguardando Aprovação',
-  aprovado:                  'Aprovado',
-  reprovado:                 'Reprovado',
-  em_execucao:               'Em Execução',
-  concluido:                 'Concluído',
-  cancelado:                 'Cancelado',
-  indisponivel_estoque:      'Indisponível no Estoque',
+  requisitado:                          'Requisitado',
+  visita_tecnica_solicitada:            'Visita Técnica Solicitada',
+  visita_realizada:                     'Visita Realizada',
+  aguardando_aprovacao:                 'Aguardando Aprovação',
+  necessidade_parcialmente_constatada:  'Necessidade Parcialmente Constatada',
+  aprovado:                             'Aprovado',
+  parcialmente_aprovado:                'Parcialmente Aprovado',
+  reprovado:                            'Reprovado',
+  em_execucao:                          'Em Execução',
+  concluido:                            'Concluído',
+  cancelado:                            'Cancelado',
+  indisponivel_estoque:                 'Indisponível no Estoque',
 }
 
 export const REQUEST_CHANNEL_LABELS: Record<string, string> = {

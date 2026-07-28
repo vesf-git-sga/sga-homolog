@@ -8239,10 +8239,10 @@ app.post('/api/asset-movements', authenticateToken, authorizePermission('ACTION_
             if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
             return res.status(400).json({ message: 'Solicitação de TI não encontrada.' });
         }
-        if (reqCheck.rows[0].status !== 'aprovado') {
+        if (!['aprovado', 'parcialmente_aprovado'].includes(reqCheck.rows[0].status)) {
             if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
             return res.status(400).json({
-                message: `A solicitação de TI precisa estar em status "Aprovada" para vincular uma movimentação (status atual: ${reqCheck.rows[0].status}).`
+                message: `A solicitação de TI precisa estar em status "Aprovada" ou "Parcialmente Aprovada" para vincular uma movimentação (status atual: ${reqCheck.rows[0].status}).`
             });
         }
     }

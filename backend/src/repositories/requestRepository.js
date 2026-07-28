@@ -152,7 +152,7 @@ async function transitionStatus(pool, requestId, newStatus, userId, notes, onTra
     // Campos extras para algumas transições
     const extraFields = []
     const extraValues = []
-    if (newStatus === 'aprovado') {
+    if (newStatus === 'aprovado' || newStatus === 'parcialmente_aprovado') {
       extraFields.push(`approved_by = ${userId}`)
       extraFields.push(`approved_at = NOW()`)
     }
@@ -192,9 +192,13 @@ async function updateRequestStatus(pool, requestId, movementStatus, userId, note
   const newRequestStatus = statusMap[movementStatus]
   if (!newRequestStatus) return null
 
-  const ORDER = ['requisitado', 'visita_tecnica_solicitada', 'visita_realizada',
-    'aguardando_aprovacao', 'aprovado', 'indisponivel_estoque', 'em_execucao', 'concluido']
+  const ORDER = [
+    'requisitado', 'visita_tecnica_solicitada', 'visita_realizada',
+    'aguardando_aprovacao', 'necessidade_parcialmente_constatada',
+    'aprovado', 'parcialmente_aprovado', 'indisponivel_estoque', 'em_execucao', 'concluido',
+  ]
   const newIdx = ORDER.indexOf(newRequestStatus)
+  const APPROVED_LIKE = ['aprovado', 'parcialmente_aprovado']
 
   // Validação de progressão dentro da transação (com FOR UPDATE), eliminando a race condition
   // entre leitura livre e o SELECT FOR UPDATE do transitionStatus.
@@ -204,10 +208,10 @@ async function updateRequestStatus(pool, requestId, movementStatus, userId, note
       notes || 'Atualizado automaticamente via movimentação.',
       async (_client, lockedRequest) => {
         const currentIdx = ORDER.indexOf(lockedRequest.status)
-        if (newRequestStatus !== 'aprovado' && newIdx <= currentIdx) {
+        if (!APPROVED_LIKE.includes(newRequestStatus) && newIdx <= currentIdx) {
           throw new Error('__SKIP__')
         }
-        if (newRequestStatus === 'aprovado' && lockedRequest.status !== 'em_execucao') {
+        if (APPROVED_LIKE.includes(newRequestStatus) && lockedRequest.status !== 'em_execucao') {
           throw new Error('__SKIP__')
         }
       },
@@ -276,7 +280,7 @@ async function findTechnicalVisitsByRequestId(pool, requestId) {
      LEFT JOIN users uc  ON uc.id = tv.completed_by
      LEFT JOIN users ucr ON ucr.id = tv.created_by
      WHERE tv.request_id = $1
-     ORDER BY tv.created_at DESC`,
+     ORDER BY tv.created_at ASC`,
     [requestId]
   )
   return result.rows
@@ -332,13 +336,145 @@ async function findCatalogItemsByRequestId(pool, requestId) {
     `SELECT rci.*,
             it.name  AS item_type_name,
             cb.name  AS brand_name,
-            cm.name  AS model_name
+            cm.name  AS model_name,
+            latest_visit.visit_id       AS visit_result_visit_id,
+            latest_visit.result         AS visit_result,
+            latest_visit.findings       AS visit_result_findings,
+            latest_visit.constatada_quantity AS visit_constatada_quantity,
+            rid.decision                AS deliberation_decision,
+            rid.approved_quantity       AS deliberation_approved_quantity,
+            rid.notes                   AS deliberation_notes,
+            rid.decided_at              AS deliberation_decided_at,
+            ud.full_name                AS deliberation_decided_by_name
      FROM request_catalog_items rci
      JOIN item_types    it ON it.id = rci.item_type_id
      LEFT JOIN catalog_brands cb ON cb.id = rci.brand_id
      LEFT JOIN catalog_models  cm ON cm.id = rci.model_id
+     LEFT JOIN LATERAL (
+       SELECT tvir.visit_id, tvir.result, tvir.findings, tvir.constatada_quantity
+       FROM technical_visit_item_results tvir
+       JOIN technical_visits tv ON tv.id = tvir.visit_id
+       WHERE tvir.catalog_item_id = rci.id
+         AND tv.request_id = rci.request_id
+         AND tv.completed_at IS NOT NULL
+       ORDER BY tv.completed_at DESC, tvir.id DESC
+       LIMIT 1
+     ) latest_visit ON true
+     LEFT JOIN request_item_deliberations rid
+       ON rid.catalog_item_id = rci.id AND rid.request_id = rci.request_id
+     LEFT JOIN users ud ON ud.id = rid.decided_by
      WHERE rci.request_id = $1
      ORDER BY rci.created_at ASC`,
+    [requestId]
+  )
+  return result.rows.map((row) => ({
+    id: row.id,
+    request_id: row.request_id,
+    item_type_id: row.item_type_id,
+    item_type_name: row.item_type_name,
+    brand_id: row.brand_id,
+    brand_name: row.brand_name,
+    model_id: row.model_id,
+    model_name: row.model_name,
+    description: row.description,
+    quantity: row.quantity,
+    created_at: row.created_at,
+    visit_result: row.visit_result
+      ? {
+          visit_id: row.visit_result_visit_id,
+          result: row.visit_result,
+          findings: row.visit_result_findings,
+          constatada_quantity: row.visit_constatada_quantity,
+        }
+      : null,
+    deliberation: row.deliberation_decision
+      ? {
+          decision: row.deliberation_decision,
+          approved_quantity: row.deliberation_approved_quantity,
+          notes: row.deliberation_notes,
+          decided_at: row.deliberation_decided_at,
+          decided_by_name: row.deliberation_decided_by_name,
+        }
+      : null,
+  }))
+}
+
+async function upsertVisitItemResults(client, visitId, itemResults) {
+  for (const item of itemResults) {
+    await client.query(
+      `INSERT INTO technical_visit_item_results
+         (visit_id, catalog_item_id, result, findings, constatada_quantity)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (visit_id, catalog_item_id)
+       DO UPDATE SET
+         result = EXCLUDED.result,
+         findings = EXCLUDED.findings,
+         constatada_quantity = EXCLUDED.constatada_quantity`,
+      [
+        visitId,
+        item.catalog_item_id,
+        item.result,
+        item.findings || null,
+        item.constatada_quantity ?? null,
+      ]
+    )
+  }
+}
+
+async function findVisitItemResults(pool, visitId) {
+  const result = await pool.query(
+    `SELECT tvir.*,
+            it.name AS item_type_name,
+            cb.name AS brand_name,
+            cm.name AS model_name,
+            rci.quantity
+     FROM technical_visit_item_results tvir
+     JOIN request_catalog_items rci ON rci.id = tvir.catalog_item_id
+     JOIN item_types it ON it.id = rci.item_type_id
+     LEFT JOIN catalog_brands cb ON cb.id = rci.brand_id
+     LEFT JOIN catalog_models cm ON cm.id = rci.model_id
+     WHERE tvir.visit_id = $1
+     ORDER BY rci.id ASC`,
+    [visitId]
+  )
+  return result.rows
+}
+
+async function upsertItemDeliberations(client, requestId, decisions, decidedBy) {
+  for (const d of decisions) {
+    await client.query(
+      `INSERT INTO request_item_deliberations
+         (request_id, catalog_item_id, decision, approved_quantity, notes, decided_by, decided_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (request_id, catalog_item_id)
+       DO UPDATE SET
+         decision = EXCLUDED.decision,
+         approved_quantity = EXCLUDED.approved_quantity,
+         notes = EXCLUDED.notes,
+         decided_by = EXCLUDED.decided_by,
+         decided_at = NOW()`,
+      [
+        requestId,
+        d.catalog_item_id,
+        d.decision,
+        d.approved_quantity ?? null,
+        d.notes || null,
+        decidedBy,
+      ]
+    )
+  }
+}
+
+async function findItemDeliberations(pool, requestId) {
+  const result = await pool.query(
+    `SELECT rid.*, u.full_name AS decided_by_name,
+            it.name AS item_type_name, rci.quantity AS requested_quantity
+     FROM request_item_deliberations rid
+     JOIN request_catalog_items rci ON rci.id = rid.catalog_item_id
+     JOIN item_types it ON it.id = rci.item_type_id
+     LEFT JOIN users u ON u.id = rid.decided_by
+     WHERE rid.request_id = $1
+     ORDER BY rid.catalog_item_id ASC`,
     [requestId]
   )
   return result.rows
@@ -368,7 +504,8 @@ async function findUnitById(pool, unitId) {
 async function findApprovedRequestById(pool, requestId) {
   const r = await pool.query(
     `SELECT id, protocol, type, status, unit_id, requester_person_id
-     FROM requests WHERE id = $1 AND status = 'aprovado'`,
+     FROM requests
+     WHERE id = $1 AND status IN ('aprovado', 'parcialmente_aprovado')`,
     [requestId]
   )
   return r.rows[0] || null
@@ -384,27 +521,59 @@ async function findRequestForMovementPrefill(pool, protocol) {
        COALESCE(
          json_agg(
            json_build_object(
-             'item_type_name', it.name,
-             'brand_name',     cb.name,
-             'model_name',     cm.name,
-             'description',    rci.description,
-             'quantity',       rci.quantity
+             'catalog_item_id', rci.id,
+             'item_type_name',  it.name,
+             'brand_name',      cb.name,
+             'model_name',      cm.name,
+             'description',     rci.description,
+             'quantity',        COALESCE(rid.approved_quantity, rci.quantity),
+             'requested_quantity', rci.quantity,
+             'decision',        rid.decision
            ) ORDER BY rci.id
-         ) FILTER (WHERE rci.id IS NOT NULL),
+         ) FILTER (WHERE rci.id IS NOT NULL AND rid.decision = 'aprovado'),
          '[]'::json
        ) AS items
      FROM requests r
      JOIN people p ON r.requester_person_id = p.id
      JOIN units  u ON r.unit_id = u.id
-     LEFT JOIN request_catalog_items rci ON r.id  = rci.request_id
-     LEFT JOIN item_types            it  ON rci.item_type_id = it.id
-     LEFT JOIN catalog_brands        cb  ON rci.brand_id     = cb.id
-     LEFT JOIN catalog_models        cm  ON rci.model_id     = cm.id
-     WHERE r.protocol = $1 AND r.status = 'aprovado'
+     LEFT JOIN request_catalog_items rci ON r.id = rci.request_id
+     LEFT JOIN request_item_deliberations rid
+       ON rid.catalog_item_id = rci.id AND rid.request_id = r.id
+     LEFT JOIN item_types     it ON rci.item_type_id = it.id
+     LEFT JOIN catalog_brands cb ON rci.brand_id     = cb.id
+     LEFT JOIN catalog_models cm ON rci.model_id     = cm.id
+     WHERE r.protocol = $1 AND r.status IN ('aprovado', 'parcialmente_aprovado')
      GROUP BY r.id, p.full_name, u.name`,
     [protocol]
   )
-  return r.rows[0] || null
+  const row = r.rows[0] || null
+  if (!row) return null
+  // Solicitações legadas aprovadas sem deliberação: fallback para todos os itens
+  if ((!row.items || row.items.length === 0) && ['aprovado', 'parcialmente_aprovado'].includes(row.status)) {
+    const legacy = await pool.query(
+      `SELECT
+         json_agg(
+           json_build_object(
+             'catalog_item_id', rci.id,
+             'item_type_name',  it.name,
+             'brand_name',      cb.name,
+             'model_name',      cm.name,
+             'description',     rci.description,
+             'quantity',        rci.quantity,
+             'requested_quantity', rci.quantity,
+             'decision',        'aprovado'
+           ) ORDER BY rci.id
+         ) AS items
+       FROM request_catalog_items rci
+       JOIN item_types it ON it.id = rci.item_type_id
+       LEFT JOIN catalog_brands cb ON cb.id = rci.brand_id
+       LEFT JOIN catalog_models cm ON cm.id = rci.model_id
+       WHERE rci.request_id = $1`,
+      [row.id]
+    )
+    row.items = legacy.rows[0]?.items || []
+  }
+  return row
 }
 
 async function findRequestsForVisitRoute(pool) {
@@ -568,6 +737,10 @@ module.exports = {
   findMovementsByRequestId,
   createCatalogItems,
   findCatalogItemsByRequestId,
+  upsertVisitItemResults,
+  findVisitItemResults,
+  upsertItemDeliberations,
+  findItemDeliberations,
   updateOficioPath,
   personExists,
   findUnitById,

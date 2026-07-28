@@ -17,6 +17,9 @@ import {
 	StatusHistoryEntry,
 	LinkedMovement,
 	RequestStatus,
+	TechnicalVisit,
+	VisitItemResultValue,
+	ItemDeliberationDecision,
 } from '../types/requests';
 import {
 	REQUEST_TYPE_LABELS,
@@ -29,6 +32,52 @@ interface RequestDetailProps {
 	currentUserRole: string;
 	onClose: () => void;
 }
+
+const DELIBERATION_STATUSES = new Set([
+	'aguardando_aprovacao',
+	'necessidade_parcialmente_constatada',
+]);
+
+const APPROVED_LIKE_STATUSES = new Set(['aprovado', 'parcialmente_aprovado']);
+
+type ItemVisitDraft = Record<
+	number,
+	{ result: VisitItemResultValue | ''; constatada_quantity: number }
+>;
+type ItemDeliberationDraft = Record<
+	number,
+	{ decision: ItemDeliberationDecision | ''; approved_quantity: number }
+>;
+
+const itemLabel = (item: {
+	item_type_name: string;
+	brand_name?: string | null;
+	model_name?: string | null;
+}) =>
+	[item.item_type_name, item.brand_name, item.model_name]
+		.filter(Boolean)
+		.join(' · ');
+
+const getVisitItemResult = (
+	visit: TechnicalVisit,
+	catalogItemId: number,
+) => visit.item_results?.find((r) => r.catalog_item_id === catalogItemId);
+
+const buildVisitEditDraft = (
+	items: EquipmentRequest['items'],
+	visit: TechnicalVisit,
+): ItemVisitDraft => {
+	const draft: ItemVisitDraft = {};
+	(items || []).forEach((item) => {
+		const visitResult = getVisitItemResult(visit, item.id);
+		draft[item.id] = {
+			result: visitResult?.result || '',
+			constatada_quantity:
+				visitResult?.constatada_quantity || item.quantity,
+		};
+	});
+	return draft;
+};
 
 // ─── Labels de ação por transição ──────────────────────────────────────────
 const TRANSITION_LABELS: Record<string, string> = {
@@ -199,23 +248,30 @@ const RequestDetail = ({
 	const [editScheduleSearch, setEditScheduleSearch] = useState(''); // texto
 	const [editScheduleOpen, setEditScheduleOpen] = useState(false);
 
-	// Registrar resultado (novo)
+	// Registrar resultado (por equipamento)
 	const [completingVisitId, setCompletingVisitId] = useState<number | null>(
 		null,
 	);
-	const [visitResult, setVisitResult] = useState<
-		'constatada' | 'nao_constatada' | ''
-	>('');
+	const [itemVisitResults, setItemVisitResults] = useState<ItemVisitDraft>({});
 	const [visitFindings, setVisitFindings] = useState('');
+	const [completingVisitMode, setCompletingVisitMode] = useState<
+		'itens' | 'frustrada' | null
+	>(null);
+	const [frustratedReason, setFrustratedReason] = useState('');
 
-	// Editar resultado existente
+	// Editar resultado existente (por equipamento)
 	const [editingVisitResultId, setEditingVisitResultId] = useState<
 		number | null
 	>(null);
-	const [editVisitResult, setEditVisitResult] = useState<
-		'constatada' | 'nao_constatada' | ''
-	>('');
+	const [editItemVisitResults, setEditItemVisitResults] =
+		useState<ItemVisitDraft>({});
 	const [editVisitFindings, setEditVisitFindings] = useState('');
+
+	// Deliberação da gerência por equipamento
+	const [deliberationDraft, setDeliberationDraft] =
+		useState<ItemDeliberationDraft>({});
+	const [deliberationNotes, setDeliberationNotes] = useState('');
+	const [showDeliberationForm, setShowDeliberationForm] = useState(false);
 
 	// DIT — form de ciência
 	const [showDitForm, setShowDitForm] = useState(false);
@@ -401,20 +457,58 @@ const RequestDetail = ({
 		}
 	};
 
-	const handleUpdateVisitResult = async (visitId: number) => {
-		if (!editVisitResult) {
-			addToast('Selecione o resultado.', 'error');
-			return;
+	const initItemVisitDraft = () => {
+		const draft: ItemVisitDraft = {};
+		(request?.items || []).forEach((item) => {
+			draft[item.id] = { result: '', constatada_quantity: item.quantity };
+		});
+		return draft;
+	};
+
+	const validateItemVisitDraft = (draft: ItemVisitDraft) => {
+		const items = request?.items || [];
+		for (const item of items) {
+			const entry = draft[item.id];
+			if (!entry?.result) {
+				addToast('Informe o resultado de todos os equipamentos.', 'error');
+				return false;
+			}
+			if (entry.result === 'constatada') {
+				const qty = Number(entry.constatada_quantity);
+				if (!qty || qty < 1 || qty > item.quantity) {
+					addToast(
+						`Quantidade constatada inválida para "${itemLabel(item)}".`,
+						'error',
+					);
+					return false;
+				}
+			}
 		}
+		return true;
+	};
+
+	const buildItemResultsPayload = (draft: ItemVisitDraft) =>
+		(request?.items || []).map((item) => {
+			const entry = draft[item.id];
+			return {
+				catalog_item_id: item.id,
+				result: entry.result as VisitItemResultValue,
+				constatada_quantity:
+					entry.result === 'constatada' ? entry.constatada_quantity : null,
+			};
+		});
+
+	const handleUpdateVisitResult = async (visitId: number) => {
+		if (!validateItemVisitDraft(editItemVisitResults)) return;
 		setIsActing(true);
 		try {
 			await requestsApi.updateVisitResult(requestId, visitId, {
-				result: editVisitResult,
+				item_results: buildItemResultsPayload(editItemVisitResults),
 				findings: editVisitFindings || undefined,
 			});
 			addToast('Resultado atualizado.', 'success');
 			setEditingVisitResultId(null);
-			setEditVisitResult('');
+			setEditItemVisitResults({});
 			setEditVisitFindings('');
 			await loadRequest();
 		} catch (err: any) {
@@ -428,24 +522,121 @@ const RequestDetail = ({
 	};
 
 	const handleCompleteVisit = async (visitId: number) => {
-		if (!visitResult) {
-			addToast('Selecione o resultado da visita.', 'error');
-			return;
-		}
+		if (!validateItemVisitDraft(itemVisitResults)) return;
 		setIsActing(true);
 		try {
 			await requestsApi.completeVisit(requestId, visitId, {
-				result: visitResult,
+				item_results: buildItemResultsPayload(itemVisitResults),
 				findings: visitFindings || undefined,
 			});
 			addToast('Visita técnica concluída.', 'success');
 			setCompletingVisitId(null);
-			setVisitResult('');
+			setCompletingVisitMode(null);
+			setItemVisitResults({});
 			setVisitFindings('');
 			await loadRequest();
 		} catch (err: any) {
 			addToast(
 				err?.response?.data?.message || 'Erro ao concluir visita.',
+				'error',
+			);
+		} finally {
+			setIsActing(false);
+		}
+	};
+
+	const handleCompleteFrustratedVisit = async (visitId: number) => {
+		if (!frustratedReason.trim()) {
+			addToast('Informe o motivo da visita frustrada.', 'error');
+			return;
+		}
+		setIsActing(true);
+		try {
+			await requestsApi.completeVisit(requestId, visitId, {
+				outcome: 'frustrada',
+				reason: frustratedReason.trim(),
+			});
+			addToast(
+				'Visita frustrada registrada. Agende uma nova visita técnica.',
+				'success',
+			);
+			setCompletingVisitId(null);
+			setCompletingVisitMode(null);
+			setFrustratedReason('');
+			await loadRequest();
+			setShowScheduleVisit(true);
+		} catch (err: any) {
+			addToast(
+				err?.response?.data?.message || 'Erro ao registrar visita frustrada.',
+				'error',
+			);
+		} finally {
+			setIsActing(false);
+		}
+	};
+
+	const resetCompletingVisit = () => {
+		setCompletingVisitId(null);
+		setCompletingVisitMode(null);
+		setItemVisitResults({});
+		setVisitFindings('');
+		setFrustratedReason('');
+	};
+
+	const initDeliberationDraft = () => {
+		const draft: ItemDeliberationDraft = {};
+		(request?.items || []).forEach((item) => {
+			draft[item.id] = {
+				decision: item.deliberation?.decision || '',
+				approved_quantity:
+					item.deliberation?.approved_quantity || item.quantity,
+			};
+		});
+		setDeliberationDraft(draft);
+		setShowDeliberationForm(true);
+	};
+
+	const handleSubmitDeliberation = async () => {
+		const items = request?.items || [];
+		for (const item of items) {
+			const d = deliberationDraft[item.id];
+			if (!d?.decision) {
+				addToast('Delibere sobre todos os equipamentos.', 'error');
+				return;
+			}
+			if (d.decision === 'aprovado') {
+				const qty = Number(d.approved_quantity);
+				if (!qty || qty < 1 || qty > item.quantity) {
+					addToast(
+						`Quantidade inválida para "${itemLabel(item)}".`,
+						'error',
+					);
+					return;
+				}
+			}
+		}
+		setIsActing(true);
+		try {
+			await requestsApi.submitItemDeliberations(
+				requestId,
+				items.map((item) => {
+					const d = deliberationDraft[item.id];
+					return {
+						catalog_item_id: item.id,
+						decision: d.decision as ItemDeliberationDecision,
+						approved_quantity:
+							d.decision === 'aprovado' ? d.approved_quantity : null,
+					};
+				}),
+				deliberationNotes || undefined,
+			);
+			addToast('Deliberação registrada.', 'success');
+			setShowDeliberationForm(false);
+			setDeliberationNotes('');
+			await loadRequest();
+		} catch (err: any) {
+			addToast(
+				err?.response?.data?.message || 'Erro ao registrar deliberação.',
 				'error',
 			);
 		} finally {
@@ -665,7 +856,7 @@ const RequestDetail = ({
 												</p>
 											</div>
 										)}
-								{(request.status === 'aprovado' || request.status === 'indisponivel_estoque') && (
+								{(APPROVED_LIKE_STATUSES.has(request.status) || request.status === 'indisponivel_estoque') && (
 									<div className="col-span-2 space-y-1">
 										{request.dit_ciente_at ? (
 											<>
@@ -734,45 +925,44 @@ const RequestDetail = ({
 												<p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
 													Equipamentos Solicitados
 												</p>
-												<ul className="space-y-1.5">
-													{request.items.map(
-														(item) => (
-															<li
-																key={item.id}
-																className="flex items-center justify-between px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-sm"
-															>
+												<ul className="space-y-2">
+													{request.items.map((item) => (
+														<li
+															key={item.id}
+															className="px-3 py-2.5 bg-blue-50 border border-blue-100 rounded-lg text-sm space-y-1.5"
+														>
+															<div className="flex items-center justify-between gap-2">
 																<span className="text-blue-800 font-medium">
-																	{[
-																		item.item_type_name,
-																		item.brand_name,
-																		item.model_name,
-																	]
-																		.filter(
-																			Boolean,
-																		)
-																		.join(
-																			' · ',
-																		)}
+																	{itemLabel(item)}
 																	{item.description &&
 																		!item.brand_name && (
 																			<span className="text-gray-500">
 																				{' '}
-																				—{' '}
-																				{
-																					item.description
-																				}
+																				— {item.description}
 																			</span>
 																		)}
 																</span>
 																<span className="text-xs text-blue-600 font-semibold ml-3 flex-shrink-0">
-																	×{' '}
-																	{
-																		item.quantity
-																	}
+																	Solicitado: × {item.quantity}
 																</span>
-															</li>
-														),
-													)}
+															</div>
+															{item.deliberation && (
+																<div className="flex flex-wrap gap-1.5">
+																	<span
+																		className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
+																			item.deliberation.decision === 'aprovado'
+																				? 'bg-green-100 text-green-700'
+																				: 'bg-red-100 text-red-700'
+																		}`}
+																	>
+																		{item.deliberation.decision === 'aprovado'
+																			? `Aprovado × ${item.deliberation.approved_quantity ?? item.quantity}`
+																			: 'Reprovado'}
+																	</span>
+																</div>
+															)}
+														</li>
+													))}
 												</ul>
 											</div>
 										)}
@@ -816,7 +1006,13 @@ const RequestDetail = ({
 													Visitas Técnicas
 												</p>
 												<div className="space-y-2">
-													{request.visits.map((v) => {
+													{[...(request.visits ?? [])]
+														.sort(
+															(a, b) =>
+																new Date(a.created_at).getTime() -
+																new Date(b.created_at).getTime(),
+														)
+														.map((v) => {
 														const canEditSchedule =
 															!v.completed_at &&
 															request.status ===
@@ -825,15 +1021,32 @@ const RequestDetail = ({
 															editingVisitScheduleId ===
 															v.id;
 														const isRegisteringResult =
-															completingVisitId ===
-															v.id;
+															completingVisitId === v.id &&
+															completingVisitMode === 'itens';
+														const isRegisteringFrustrated =
+															completingVisitId === v.id &&
+															completingVisitMode === 'frustrada';
 														const isEditingResult =
 															editingVisitResultId ===
 															v.id;
+														const latestEditableVisitId = [...(request.visits ?? [])]
+															.filter(
+																(visit) =>
+																	visit.completed_at &&
+																	visit.result !== 'frustrada',
+															)
+															.sort(
+																(a, b) =>
+																	new Date(b.completed_at!).getTime() -
+																	new Date(a.completed_at!).getTime(),
+															)[0]?.id;
 														const canEditVisitResult =
 															!!v.completed_at &&
-															request.status ===
-																"aguardando_aprovacao";
+															v.result !== 'frustrada' &&
+															v.id === latestEditableVisitId &&
+															DELIBERATION_STATUSES.has(
+																request.status,
+															);
 
 														return (
 															<div
@@ -1030,23 +1243,22 @@ const RequestDetail = ({
 																		<div className="flex items-start justify-between gap-2">
 																			<div className="space-y-1">
 																				<div className="flex items-center gap-2 flex-wrap">
-																					{(
-																						v.result
-																					) ?
-																						(
-																							v.result ===
-																							'constatada'
-																						) ?
+																					{v.completed_at ?
+																						v.result === 'frustrada' ?
+																							<span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-800 rounded-full font-medium">
+																								Visita Frustrada
+																							</span>
+																						: v.result === 'constatada' ?
 																							<span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">
-																								Necessidade
-																								Constatada
+																								Necessidade Constatada
 																							</span>
-																						:	<span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">
-																								Necessidade
-																								Não
-																								Constatada
+																						: v.result === 'nao_constatada' ?
+																							<span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">
+																								Necessidade Não Constatada
 																							</span>
-
+																						:	<span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full font-medium">
+																								Resultado Parcial por Equipamento
+																							</span>
 																					:	<span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-medium">
 																							Pendente
 																						</span>
@@ -1119,268 +1331,321 @@ const RequestDetail = ({
 
 																{/* ── Seção de resultado ── */}
 																<div className="p-3 bg-white">
-																	{(
-																		!v.completed_at
-																	) ?
-																		(
-																			isRegisteringResult
-																		) ?
-																			<div className="space-y-2">
+																	{!v.completed_at ? (
+																		isRegisteringResult ? (
+																			<div className="space-y-3">
 																				<p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-																					Registrar
-																					resultado
+																					Registrar resultado por equipamento
 																				</p>
-																				<div className="flex gap-2">
-																					{[
-																						{
-																							value: 'constatada',
-																							label: 'Necessidade Constatada',
-																						},
-																						{
-																							value: 'nao_constatada',
-																							label: 'Necessidade Não Constatada',
-																						},
-																					].map(
-																						(
-																							opt,
-																						) => (
-																							<button
-																								key={
-																									opt.value
-																								}
-																								type="button"
-																								onClick={() =>
-																									setVisitResult(
-																										opt.value as
-																											| 'constatada'
-																											| 'nao_constatada',
-																									)
-																								}
-																								className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
-																									(
-																										visitResult ===
-																										opt.value
-																									) ?
-																										'border-purple-500 bg-purple-50 text-purple-700'
-																									:	'border-gray-200 text-gray-600'
-																								}`}
-																							>
-																								{
-																									opt.label
-																								}
-																							</button>
-																						),
-																					)}
-																				</div>
+																				{(request.items || []).map((item) => {
+																					const draft = itemVisitResults[item.id] || {
+																						result: '' as const,
+																						constatada_quantity: item.quantity,
+																					};
+																					return (
+																						<div key={item.id} className="border border-gray-200 rounded-lg p-2 space-y-1.5">
+																							<p className="text-xs font-medium text-gray-700">
+																								{itemLabel(item)}
+																								<span className="text-gray-500 font-normal ml-2">
+																									Solicitado: × {item.quantity}
+																								</span>
+																							</p>
+																							<div className="flex gap-2">
+																								{[
+																									{ value: 'constatada', label: 'Constatada' },
+																									{ value: 'nao_constatada', label: 'Não constatada' },
+																								].map((opt) => (
+																									<button
+																										key={opt.value}
+																										type="button"
+																										onClick={() =>
+																											setItemVisitResults((prev) => ({
+																												...prev,
+																												[item.id]: {
+																													result: opt.value as VisitItemResultValue,
+																													constatada_quantity:
+																														prev[item.id]?.constatada_quantity || item.quantity,
+																												},
+																											}))
+																										}
+																										className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
+																											draft.result === opt.value
+																												? 'border-purple-500 bg-purple-50 text-purple-700'
+																												: 'border-gray-200 text-gray-600'
+																										}`}
+																									>
+																										{opt.label}
+																									</button>
+																								))}
+																							</div>
+																							{draft.result === 'constatada' && (
+																								<div>
+																									<label className="text-xs text-gray-600 mb-1 block">
+																										Quantidade com necessidade constatada
+																									</label>
+																									<input
+																										type="number"
+																										min={1}
+																										max={item.quantity}
+																										value={draft.constatada_quantity}
+																										onChange={(e) =>
+																											setItemVisitResults((prev) => ({
+																												...prev,
+																												[item.id]: {
+																													result: 'constatada',
+																													constatada_quantity:
+																														parseInt(e.target.value, 10) || 1,
+																												},
+																											}))
+																										}
+																										className="w-28 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300"
+																									/>
+																								</div>
+																							)}
+																						</div>
+																					);
+																				})}
 																				<textarea
-																					rows={
-																						2
-																					}
-																					placeholder="Parecer técnico (opcional)…"
-																					value={
-																						visitFindings
-																					}
-																					onChange={(
-																						e,
-																					) =>
-																						setVisitFindings(
-																							e
-																								.target
-																								.value,
-																						)
-																					}
+																					rows={2}
+																					placeholder="Parecer técnico geral (opcional)…"
+																					value={visitFindings}
+																					onChange={(e) => setVisitFindings(e.target.value)}
 																					className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none"
 																				/>
 																				<div className="flex gap-2">
 																					<button
-																						onClick={() => {
-																							setCompletingVisitId(
-																								null,
-																							);
-																							setVisitResult(
-																								'',
-																							);
-																							setVisitFindings(
-																								'',
-																							);
-																						}}
+																						onClick={resetCompletingVisit}
 																						className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
 																					>
 																						Cancelar
 																					</button>
 																					<button
-																						onClick={() =>
-																							handleCompleteVisit(
-																								v.id,
-																							)
-																						}
+																						onClick={() => handleCompleteVisit(v.id)}
 																						disabled={
 																							isActing ||
-																							!visitResult
+																							(request.items || []).some(
+																								(item) => !itemVisitResults[item.id]?.result,
+																							)
 																						}
 																						className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60"
 																					>
-																						{(
-																							isActing
-																						) ?
-																							'Salvando…'
-																						:	'Salvar'
-																						}
+																						{isActing ? 'Salvando…' : 'Salvar'}
 																					</button>
 																				</div>
 																			</div>
-																		:	<button
-																				onClick={() =>
-																					setCompletingVisitId(
-																						v.id,
-																					)
-																				}
-																				className="text-xs text-purple-600 hover:underline font-medium"
-																			>
-																				Registrar
-																				resultado
-																			</button>
-
-																	: (
-																		isEditingResult
-																	) ?
-																		<div className="space-y-2">
-																			<p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-																				Corrigir
-																				resultado
-																			</p>
-																			<div className="flex gap-2">
-																				{[
-																					{
-																						value: 'constatada',
-																						label: 'Defeito Constatado',
-																					},
-																					{
-																						value: 'nao_constatada',
-																						label: 'Não Constatado',
-																					},
-																				].map(
-																					(
-																						opt,
-																					) => (
-																						<button
-																							key={
-																								opt.value
-																							}
-																							type="button"
-																							onClick={() =>
-																								setEditVisitResult(
-																									opt.value as
-																										| 'constatada'
-																										| 'nao_constatada',
-																								)
-																							}
-																							className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
-																								(
-																									editVisitResult ===
-																									opt.value
-																								) ?
-																									'border-purple-500 bg-purple-50 text-purple-700'
-																								:	'border-gray-200 text-gray-600'
-																							}`}
-																						>
-																							{
-																								opt.label
-																							}
-																						</button>
-																					),
-																				)}
+																		) : isRegisteringFrustrated ? (
+																			<div className="space-y-3">
+																				<p className="text-xs font-semibold text-orange-700 uppercase tracking-wide">
+																					Registrar visita frustrada
+																				</p>
+																				<p className="text-xs text-gray-500">
+																					Use quando não foi possível verificar a necessidade in loco.
+																					Após salvar, você poderá agendar uma nova visita.
+																				</p>
+																				<textarea
+																					rows={3}
+																					placeholder="Descreva o motivo da frustração da visita (obrigatório)…"
+																					value={frustratedReason}
+																					onChange={(e) => setFrustratedReason(e.target.value)}
+																					className="w-full px-2 py-1.5 text-xs border border-orange-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-orange-300 resize-none"
+																				/>
+																				<div className="flex gap-2">
+																					<button
+																						onClick={resetCompletingVisit}
+																						className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+																					>
+																						Cancelar
+																					</button>
+																					<button
+																						onClick={() => handleCompleteFrustratedVisit(v.id)}
+																						disabled={isActing || !frustratedReason.trim()}
+																						className="flex-1 py-1.5 text-xs bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-60"
+																					>
+																						{isActing ? 'Salvando…' : 'Registrar frustrada'}
+																					</button>
+																				</div>
 																			</div>
+																		) : (
+																			<div className="flex flex-wrap gap-3">
+																				<button
+																					onClick={() => {
+																						setItemVisitResults(initItemVisitDraft());
+																						setCompletingVisitId(v.id);
+																						setCompletingVisitMode('itens');
+																					}}
+																					className="text-xs text-purple-600 hover:underline font-medium"
+																				>
+																					Registrar resultado
+																				</button>
+																				<button
+																					onClick={() => {
+																						setCompletingVisitId(v.id);
+																						setCompletingVisitMode('frustrada');
+																						setFrustratedReason('');
+																					}}
+																					className="text-xs text-orange-600 hover:underline font-medium"
+																				>
+																					Visita frustrada
+																				</button>
+																			</div>
+																		)
+																	) : v.result === 'frustrada' ? (
+																		<div className="space-y-2">
+																			<p className="text-xs text-orange-800 font-medium">
+																				Verificação não realizada in loco.
+																			</p>
+																			{v.findings && (
+																				<p className="text-xs text-gray-600">
+																					<span className="font-medium">Motivo:</span> {v.findings}
+																				</p>
+																			)}
+																		</div>
+																	) : isEditingResult ? (
+																		<div className="space-y-3">
+																			<p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+																				Corrigir resultado por equipamento
+																			</p>
+																			{(request.items || []).map((item) => {
+																				const draft = editItemVisitResults[item.id] || {
+																					result: '' as const,
+																					constatada_quantity: item.quantity,
+																				};
+																				return (
+																					<div key={item.id} className="border border-gray-200 rounded-lg p-2 space-y-1.5">
+																						<p className="text-xs font-medium text-gray-700">
+																							{itemLabel(item)}
+																							<span className="text-gray-500 font-normal ml-2">
+																								Solicitado: × {item.quantity}
+																							</span>
+																						</p>
+																						<div className="flex gap-2">
+																							{[
+																								{ value: 'constatada', label: 'Constatada' },
+																								{ value: 'nao_constatada', label: 'Não constatada' },
+																							].map((opt) => (
+																								<button
+																									key={opt.value}
+																									type="button"
+																									onClick={() =>
+																										setEditItemVisitResults((prev) => ({
+																											...prev,
+																											[item.id]: {
+																												result: opt.value as VisitItemResultValue,
+																												constatada_quantity:
+																													prev[item.id]?.constatada_quantity || item.quantity,
+																											},
+																										}))
+																									}
+																									className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium transition-colors ${
+																										draft.result === opt.value
+																											? 'border-purple-500 bg-purple-50 text-purple-700'
+																											: 'border-gray-200 text-gray-600'
+																									}`}
+																								>
+																									{opt.label}
+																								</button>
+																							))}
+																						</div>
+																						{draft.result === 'constatada' && (
+																							<div>
+																								<label className="text-xs text-gray-600 mb-1 block">
+																									Quantidade com necessidade constatada
+																								</label>
+																								<input
+																									type="number"
+																									min={1}
+																									max={item.quantity}
+																									value={draft.constatada_quantity}
+																									onChange={(e) =>
+																										setEditItemVisitResults((prev) => ({
+																											...prev,
+																											[item.id]: {
+																												result: 'constatada',
+																												constatada_quantity:
+																													parseInt(e.target.value, 10) || 1,
+																											},
+																										}))
+																									}
+																									className="w-28 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300"
+																								/>
+																							</div>
+																						)}
+																					</div>
+																				);
+																			})}
 																			<textarea
-																				rows={
-																					2
-																				}
-																				placeholder="Parecer técnico (opcional)…"
-																				value={
-																					editVisitFindings
-																				}
-																				onChange={(
-																					e,
-																				) =>
-																					setEditVisitFindings(
-																						e
-																							.target
-																							.value,
-																					)
-																				}
+																				rows={2}
+																				placeholder="Parecer técnico geral (opcional)…"
+																				value={editVisitFindings}
+																				onChange={(e) => setEditVisitFindings(e.target.value)}
 																				className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-300 resize-none"
 																			/>
 																			<div className="flex gap-2">
 																				<button
 																					onClick={() => {
-																						setEditingVisitResultId(
-																							null,
-																						);
-																						setEditVisitResult(
-																							'',
-																						);
-																						setEditVisitFindings(
-																							'',
-																						);
+																						setEditingVisitResultId(null);
+																						setEditItemVisitResults({});
+																						setEditVisitFindings('');
 																					}}
 																					className="flex-1 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
 																				>
 																					Cancelar
 																				</button>
 																				<button
-																					onClick={() =>
-																						handleUpdateVisitResult(
-																							v.id,
-																						)
-																					}
+																					onClick={() => handleUpdateVisitResult(v.id)}
 																					disabled={
 																						isActing ||
-																						!editVisitResult
+																						(request.items || []).some(
+																							(item) => !editItemVisitResults[item.id]?.result,
+																						)
 																					}
 																					className="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60"
 																				>
-																					{(
-																						isActing
-																					) ?
-																						'Salvando…'
-																					:	'Salvar'
-																					}
+																					{isActing ? 'Salvando…' : 'Salvar'}
 																				</button>
 																			</div>
 																		</div>
-																	:	<div className="flex items-center justify-between">
+																	) : (
+																		<div className="space-y-2">
+																			{(request.items || []).map((item) => {
+																				const visitResult = getVisitItemResult(v, item.id);
+																				if (!visitResult) return null;
+																				return (
+																					<div key={item.id} className="flex items-center justify-between gap-2 text-xs">
+																						<span className="text-gray-600 truncate">{itemLabel(item)}</span>
+																						<span
+																							className={`px-2 py-0.5 rounded-full font-medium shrink-0 ${
+																								visitResult.result === 'constatada'
+																									? 'bg-red-100 text-red-700'
+																									: 'bg-green-100 text-green-700'
+																							}`}
+																						>
+																							{visitResult.result === 'constatada'
+																								? `Constatada × ${visitResult.constatada_quantity ?? item.quantity}`
+																								: 'Não constatada'}
+																						</span>
+																					</div>
+																				);
+																			})}
 																			{v.findings && (
-																				<p className="text-xs text-gray-500 italic truncate mr-2">
-																					"
-																					{
-																						v.findings
-																					}
-																					"
-																				</p>
+																				<p className="text-xs text-gray-500 italic">"{v.findings}"</p>
 																			)}
 																			{canEditVisitResult && (
 																				<button
 																					onClick={() => {
-																						setEditingVisitResultId(
-																							v.id,
+																						setEditItemVisitResults(
+																							buildVisitEditDraft(request.items, v),
 																						);
-																						setEditVisitResult(
-																							v.result ||
-																								'',
-																						);
-																						setEditVisitFindings(
-																							v.findings ||
-																								'',
-																						);
+																						setEditVisitFindings(v.findings || '');
+																						setEditingVisitResultId(v.id);
 																					}}
-																					className="text-xs text-purple-500 hover:text-purple-700 hover:underline shrink-0"
+																					className="text-xs text-purple-500 hover:text-purple-700 hover:underline"
 																				>
-																					Corrigir
-																					resultado
+																					Corrigir resultado
 																				</button>
 																			)}
 																		</div>
-																	}
+																	)}
 																</div>
 															</div>
 														);
@@ -1566,12 +1831,148 @@ const RequestDetail = ({
 										</div>
 									)}
 
-								{/* ── Histórico DIT ── */}
+									{/* ── Deliberação da Gerência (por equipamento) ── */}
+									{DELIBERATION_STATUSES.has(request.status) &&
+										['manager', 'admin'].includes(currentUserRole) && (
+										<div className="border border-yellow-200 rounded-xl overflow-hidden">
+											<div className="bg-yellow-50 px-4 py-2.5 flex items-center justify-between">
+												<span className="text-sm font-semibold text-yellow-900">
+													Deliberação da Gerência
+												</span>
+												{!showDeliberationForm && (
+													<button
+														onClick={initDeliberationDraft}
+														className="text-xs px-2.5 py-1 bg-yellow-600 hover:bg-yellow-700 text-white rounded-md font-medium"
+													>
+														Deliberar por equipamento
+													</button>
+												)}
+											</div>
+											{showDeliberationForm ? (
+												<div className="p-4 space-y-3 bg-white">
+													{(request.items || []).map((item) => {
+														const draft = deliberationDraft[item.id] || {
+															decision: '',
+															approved_quantity: item.quantity,
+														}
+														return (
+															<div
+																key={item.id}
+																className="border border-gray-200 rounded-lg p-3 space-y-2"
+															>
+																<p className="text-sm font-medium text-gray-800">
+																	{itemLabel(item)}
+																	<span className="text-xs text-gray-500 font-normal ml-2">
+																		Solicitado: × {item.quantity}
+																	</span>
+																</p>
+																{item.visit_result && (
+																	<p className="text-xs text-gray-500">
+																		Visita:{' '}
+																		{item.visit_result.result === 'constatada'
+																			? 'necessidade constatada'
+																			: 'necessidade não constatada'}
+																		{' '}(não vinculante)
+																	</p>
+																)}
+																<div className="flex gap-2">
+																	{[
+																		{ value: 'aprovado', label: 'Aprovar' },
+																		{ value: 'reprovado', label: 'Reprovar' },
+																	].map((opt) => (
+																		<button
+																			key={opt.value}
+																			type="button"
+																			onClick={() =>
+																				setDeliberationDraft((prev) => ({
+																					...prev,
+																					[item.id]: {
+																						decision: opt.value as ItemDeliberationDecision,
+																						approved_quantity:
+																							prev[item.id]?.approved_quantity || item.quantity,
+																					},
+																				}))
+																			}
+																			className={`flex-1 py-1.5 text-xs rounded-lg border-2 font-medium ${
+																				draft.decision === opt.value
+																					? opt.value === 'aprovado'
+																						? 'border-green-500 bg-green-50 text-green-700'
+																						: 'border-red-500 bg-red-50 text-red-700'
+																					: 'border-gray-200 text-gray-600'
+																			}`}
+																		>
+																			{opt.label}
+																		</button>
+																	))}
+																</div>
+																{draft.decision === 'aprovado' && (
+																	<div>
+																		<label className="text-xs text-gray-600 mb-1 block">
+																			Quantidade autorizada
+																		</label>
+																		<input
+																			type="number"
+																			min={1}
+																			max={item.quantity}
+																			value={draft.approved_quantity}
+																			onChange={(e) =>
+																				setDeliberationDraft((prev) => ({
+																					...prev,
+																					[item.id]: {
+																						...prev[item.id],
+																						decision: 'aprovado',
+																						approved_quantity: parseInt(e.target.value, 10) || 1,
+																					},
+																				}))
+																			}
+																			className="w-28 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-yellow-400"
+																		/>
+																	</div>
+																)}
+															</div>
+														)
+													})}
+													<textarea
+														rows={2}
+														placeholder="Observação geral da deliberação (opcional)…"
+														value={deliberationNotes}
+														onChange={(e) => setDeliberationNotes(e.target.value)}
+														className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-yellow-400 resize-none"
+													/>
+													<div className="flex gap-2 justify-end">
+														<button
+															onClick={() => {
+																setShowDeliberationForm(false)
+																setDeliberationNotes('')
+															}}
+															className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+														>
+															Cancelar
+														</button>
+														<button
+															onClick={handleSubmitDeliberation}
+															disabled={isActing}
+															className="px-4 py-1.5 text-sm bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium disabled:opacity-60"
+														>
+															{isActing ? 'Salvando…' : 'Confirmar deliberação'}
+														</button>
+													</div>
+												</div>
+											) : (
+												<div className="px-4 py-3 text-xs text-yellow-800 bg-white">
+													Aprove ou reprove cada equipamento e defina a quantidade autorizada.
+													Itens reprovados não seguirão para Registro de Movimentação.
+												</div>
+											)}
+										</div>
+									)}
+
+									{/* ── Histórico DIT ── */}
 								{request.dit_ciente_at && (
 									<div className="border border-blue-200 rounded-xl overflow-hidden">
 										<div className="bg-blue-600 px-4 py-2.5 flex items-center justify-between">
 											<span className="text-sm font-semibold text-white">Histórico DIT</span>
-											{['aprovado', 'indisponivel_estoque'].includes(request.status) &&
+											{['aprovado', 'parcialmente_aprovado', 'indisponivel_estoque'].includes(request.status) &&
 												['operator', 'manager', 'admin'].includes(currentUserRole) && (
 												<div className="flex gap-2">
 													<button
@@ -1721,7 +2122,7 @@ const RequestDetail = ({
 													vinculada.
 												</p>
 											</div>
-											{request.status === 'aprovado' && (
+											{APPROVED_LIKE_STATUSES.has(request.status) && (
 												<div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700 leading-relaxed">
 													<p className="font-semibold mb-1">
 														Próximo passo: registrar
@@ -1825,7 +2226,7 @@ const RequestDetail = ({
 											</div>
 										</div>
 									:	<div className="space-y-3">
-									{request.status === 'aprovado' && !request.dit_ciente_at &&
+									{APPROVED_LIKE_STATUSES.has(request.status) && !request.dit_ciente_at &&
 										['operator', 'manager', 'admin'].includes(currentUserRole) &&
 										showDitForm && (
 												<div className="w-full border border-amber-300 bg-amber-50 rounded-xl p-4 space-y-3">
@@ -1876,7 +2277,7 @@ const RequestDetail = ({
 									<div className="flex flex-wrap items-center justify-between gap-3">
 										<div className="flex flex-wrap items-center gap-2">
 											{auxiliaryTransitions.map(renderTransitionButton)}
-											{request.status === 'aprovado' && !request.dit_ciente_at &&
+											{APPROVED_LIKE_STATUSES.has(request.status) && !request.dit_ciente_at &&
 												['operator', 'manager', 'admin'].includes(currentUserRole) &&
 												!showDitForm && (
 													<button

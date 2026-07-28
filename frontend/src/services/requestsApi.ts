@@ -50,13 +50,32 @@ export interface UpdateVisitSchedulePayload {
 }
 
 export interface CompleteVisitPayload {
-  result: 'constatada' | 'nao_constatada'
+  outcome?: 'frustrada'
+  reason?: string
+  item_results?: Array<{
+    catalog_item_id: number
+    result: 'constatada' | 'nao_constatada'
+    findings?: string
+    constatada_quantity?: number | null
+  }>
   findings?: string
 }
 
 export interface UpdateVisitResultPayload {
-  result: 'constatada' | 'nao_constatada'
+  item_results: Array<{
+    catalog_item_id: number
+    result: 'constatada' | 'nao_constatada'
+    findings?: string
+    constatada_quantity?: number | null
+  }>
   findings?: string
+}
+
+export interface ItemDeliberationPayload {
+  catalog_item_id: number
+  decision: 'aprovado' | 'reprovado'
+  approved_quantity?: number | null
+  notes?: string
 }
 
 export interface ApprovedPrefill {
@@ -69,11 +88,14 @@ export interface ApprovedPrefill {
 }
 
 export interface MovementPrefillItem {
+  catalog_item_id?: number
   item_type_name: string
   brand_name?: string | null
   model_name?: string | null
   description?: string | null
   quantity: number
+  requested_quantity?: number
+  decision?: 'aprovado' | 'reprovado'
 }
 
 export interface MovementPrefill {
@@ -103,6 +125,9 @@ export const requestsApi = {
 
   changeStatus: (id: number, status: RequestStatus, notes?: string) =>
     axios.patch<EquipmentRequest>(`${API_URL}/requests/${id}/status`, { status, notes }).then(r => r.data),
+
+  submitItemDeliberations: (id: number, decisions: ItemDeliberationPayload[], notes?: string) =>
+    axios.post<EquipmentRequest>(`${API_URL}/requests/${id}/item-deliberations`, { decisions, notes }).then(r => r.data),
 
   getHistory: (id: number) =>
     axios.get<StatusHistoryEntry[]>(`${API_URL}/requests/${id}/history`).then(r => r.data),
