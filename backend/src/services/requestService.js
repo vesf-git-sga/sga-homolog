@@ -267,11 +267,19 @@ async function getRequestById(pool, id, currentUser) {
     repository.findCatalogItemsByRequestId(pool, id),
   ])
 
+  const visitsWithResults = await Promise.all(
+    visits.map(async (visit) => {
+      if (!visit.completed_at || visit.result === 'frustrada') return visit
+      const item_results = await repository.findVisitItemResults(pool, visit.id)
+      return { ...visit, item_results }
+    })
+  )
+
   const allowed_transitions = currentUser
     ? getAllowedTransitions(request, currentUser.role)
     : []
 
-  return { ...request, visits, history, movements, items, allowed_transitions }
+  return { ...request, visits: visitsWithResults, history, movements, items, allowed_transitions }
 }
 
 // ─── Transições de status ─────────────────────────────────────────────────
@@ -409,6 +417,17 @@ async function updateVisitResult(pool, visitId, itemResults, findings, currentUs
   }
 
   const requestId = visitRes.rows[0].request_id
+  const latestVisitRes = await pool.query(
+    `SELECT id FROM technical_visits
+     WHERE request_id = $1 AND completed_at IS NOT NULL AND result IS DISTINCT FROM 'frustrada'
+     ORDER BY completed_at DESC, id DESC
+     LIMIT 1`,
+    [requestId]
+  )
+  if (latestVisitRes.rows[0]?.id !== visitId) {
+    throw new Error('Somente a visita técnica mais recente pode ter o resultado corrigido.')
+  }
+
   const reqRes = await pool.query(
     'SELECT status FROM requests WHERE id = $1', [requestId]
   )
@@ -481,6 +500,17 @@ async function completeTechnicalVisit(pool, visitId, itemResults, findings, curr
     if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
     const visit = visitRes.rows[0]
     if (visit.completed_at) throw new Error('Esta visita já foi concluída.')
+
+    const reqRes = await client.query(
+      'SELECT status FROM requests WHERE id = $1 FOR UPDATE',
+      [visit.request_id]
+    )
+    if (reqRes.rows.length === 0) throw new Error('Solicitação não encontrada.')
+    if (reqRes.rows[0].status !== 'visita_tecnica_solicitada') {
+      throw new Error(
+        'A visita só pode ser concluída enquanto a solicitação está em visita técnica solicitada.'
+      )
+    }
 
     const itemsRes = await client.query(
       `SELECT rci.id, rci.quantity, it.name AS item_type_name

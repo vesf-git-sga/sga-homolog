@@ -137,7 +137,7 @@ async function completeTechnicalVisit(req, res, pool, logAudit) {
       err.message.includes('obrigatório') || err.message.includes('concluída') ||
       err.message.includes('disponível') || err.message.includes('inválid') ||
       err.message.includes('equipamento') || err.message.includes('Quantidade') ||
-      err.message.includes('frustrada') ? 400 : 500
+      err.message.includes('frustrada') || err.message.includes('visita técnica solicitada') ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }
@@ -181,7 +181,8 @@ async function updateVisitResult(req, res, pool, logAudit) {
     const status =
       err.message.includes('não encontrada') ? 404 :
       err.message.includes('inválido') || err.message.includes('concluída') ||
-      err.message.includes('deliberação') || err.message.includes('equipamento') ? 400 : 500
+      err.message.includes('deliberação') || err.message.includes('equipamento') ||
+      err.message.includes('mais recente') ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }

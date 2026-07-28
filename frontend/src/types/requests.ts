@@ -110,6 +110,7 @@ export interface TechnicalVisit {
     catalog_item_id: number
     result: 'constatada' | 'nao_constatada'
     findings?: string | null
+    constatada_quantity?: number | null
     item_type_name?: string
     quantity?: number
   }>

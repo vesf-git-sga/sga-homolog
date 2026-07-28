@@ -17,6 +17,7 @@ import {
 	StatusHistoryEntry,
 	LinkedMovement,
 	RequestStatus,
+	TechnicalVisit,
 	VisitItemResultValue,
 	ItemDeliberationDecision,
 } from '../types/requests';
@@ -57,6 +58,26 @@ const itemLabel = (item: {
 		.filter(Boolean)
 		.join(' · ');
 
+const getVisitItemResult = (
+	visit: TechnicalVisit,
+	catalogItemId: number,
+) => visit.item_results?.find((r) => r.catalog_item_id === catalogItemId);
+
+const buildVisitEditDraft = (
+	items: EquipmentRequest['items'],
+	visit: TechnicalVisit,
+): ItemVisitDraft => {
+	const draft: ItemVisitDraft = {};
+	(items || []).forEach((item) => {
+		const visitResult = getVisitItemResult(visit, item.id);
+		draft[item.id] = {
+			result: visitResult?.result || '',
+			constatada_quantity:
+				visitResult?.constatada_quantity || item.quantity,
+		};
+	});
+	return draft;
+};
 
 // ─── Labels de ação por transição ──────────────────────────────────────────
 const TRANSITION_LABELS: Record<string, string> = {
@@ -1008,9 +1029,21 @@ const RequestDetail = ({
 														const isEditingResult =
 															editingVisitResultId ===
 															v.id;
+														const latestEditableVisitId = [...(request.visits ?? [])]
+															.filter(
+																(visit) =>
+																	visit.completed_at &&
+																	visit.result !== 'frustrada',
+															)
+															.sort(
+																(a, b) =>
+																	new Date(b.completed_at!).getTime() -
+																	new Date(a.completed_at!).getTime(),
+															)[0]?.id;
 														const canEditVisitResult =
 															!!v.completed_at &&
 															v.result !== 'frustrada' &&
+															v.id === latestEditableVisitId &&
 															DELIBERATION_STATUSES.has(
 																request.status,
 															);
@@ -1574,39 +1607,35 @@ const RequestDetail = ({
 																		</div>
 																	) : (
 																		<div className="space-y-2">
-																			{(request.items || []).map((item) =>
-																				item.visit_result?.visit_id === v.id ? (
+																			{(request.items || []).map((item) => {
+																				const visitResult = getVisitItemResult(v, item.id);
+																				if (!visitResult) return null;
+																				return (
 																					<div key={item.id} className="flex items-center justify-between gap-2 text-xs">
 																						<span className="text-gray-600 truncate">{itemLabel(item)}</span>
 																						<span
 																							className={`px-2 py-0.5 rounded-full font-medium shrink-0 ${
-																								item.visit_result.result === 'constatada'
+																								visitResult.result === 'constatada'
 																									? 'bg-red-100 text-red-700'
 																									: 'bg-green-100 text-green-700'
 																							}`}
 																						>
-																							{item.visit_result.result === 'constatada'
-																								? `Constatada × ${item.visit_result.constatada_quantity ?? item.quantity}`
+																							{visitResult.result === 'constatada'
+																								? `Constatada × ${visitResult.constatada_quantity ?? item.quantity}`
 																								: 'Não constatada'}
 																						</span>
 																					</div>
-																				) : null,
-																			)}
+																				);
+																			})}
 																			{v.findings && (
 																				<p className="text-xs text-gray-500 italic">"{v.findings}"</p>
 																			)}
 																			{canEditVisitResult && (
 																				<button
 																					onClick={() => {
-																						const draft: ItemVisitDraft = {};
-																						(request.items || []).forEach((item) => {
-																							draft[item.id] = {
-																								result: item.visit_result?.result || '',
-																								constatada_quantity:
-																									item.visit_result?.constatada_quantity || item.quantity,
-																							};
-																						});
-																						setEditItemVisitResults(draft);
+																						setEditItemVisitResults(
+																							buildVisitEditDraft(request.items, v),
+																						);
 																						setEditVisitFindings(v.findings || '');
 																						setEditingVisitResultId(v.id);
 																					}}

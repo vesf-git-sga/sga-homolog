@@ -4,6 +4,14 @@
 
 BEGIN;
 
+-- ─── 0. Ampliar colunas de status (antes dos novos slugs longos) ─────────────
+ALTER TABLE requests
+  ALTER COLUMN status TYPE VARCHAR(50);
+
+ALTER TABLE request_status_history
+  ALTER COLUMN old_status TYPE VARCHAR(50),
+  ALTER COLUMN new_status TYPE VARCHAR(50);
+
 -- ─── 1. Novos status na solicitação ──────────────────────────────────────────
 ALTER TABLE requests DROP CONSTRAINT IF EXISTS requests_status_check;
 ALTER TABLE requests ADD CONSTRAINT requests_status_check CHECK (status IN (

@@ -549,7 +549,7 @@ async function findRequestForMovementPrefill(pool, protocol) {
   const row = r.rows[0] || null
   if (!row) return null
   // Solicitações legadas aprovadas sem deliberação: fallback para todos os itens
-  if ((!row.items || row.items.length === 0) && row.status === 'aprovado') {
+  if ((!row.items || row.items.length === 0) && ['aprovado', 'parcialmente_aprovado'].includes(row.status)) {
     const legacy = await pool.query(
       `SELECT
          json_agg(
