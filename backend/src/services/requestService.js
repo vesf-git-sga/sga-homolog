@@ -829,6 +829,171 @@ async function getUnavailableQueue(pool) {
   return repository.findUnavailableQueue(pool)
 }
 
+// ─── Vínculo retroativo com movimentação concluída ───────────────────────────
+
+const LINK_MOVEMENT_ROLES = ['admin', 'manager', 'basic', 'operator']
+
+function buildRetroactiveMatchAnalysis(request, items, movement) {
+  const requestPersonId = request.requester_person_id
+  const movementPersonId = movement.recipient_person_id
+  const personMatch =
+    requestPersonId != null &&
+    movementPersonId != null &&
+    Number(requestPersonId) === Number(movementPersonId)
+
+  const requestUnitId = request.unit_id
+  const movementUnitId = movement.destination_unit_id
+  const unitMatch =
+    requestUnitId != null &&
+    movementUnitId != null &&
+    Number(requestUnitId) === Number(movementUnitId)
+
+  const approvedItems = (items || []).filter((item) => {
+    if (!item.deliberation) return request.status === 'aprovado'
+    return item.deliberation.decision === 'aprovado'
+  })
+  const fallbackItems =
+    approvedItems.length > 0 ? approvedItems : (items || [])
+
+  const requestTypes = fallbackItems.map((item) => ({
+    item_type_id: item.item_type_id,
+    item_type_name: item.item_type_name,
+    quantity: item.deliberation?.approved_quantity ?? item.quantity,
+  }))
+
+  const movementTypeCounts = new Map()
+  for (const asset of movement.assets || []) {
+    if (asset.item_type_id == null) continue
+    const key = Number(asset.item_type_id)
+    const prev = movementTypeCounts.get(key) || {
+      item_type_id: key,
+      item_type_name: asset.item_type_name,
+      quantity: 0,
+    }
+    prev.quantity += 1
+    movementTypeCounts.set(key, prev)
+  }
+  const movementTypes = Array.from(movementTypeCounts.values())
+
+  const missingTypes = requestTypes.filter(
+    (rt) => !movementTypeCounts.has(Number(rt.item_type_id))
+  )
+  const equipmentMatch = requestTypes.length === 0
+    ? movementTypes.length === 0
+    : missingTypes.length === 0
+
+  const mismatches = []
+  if (!personMatch) mismatches.push('solicitante')
+  if (!unitMatch) mismatches.push('unidade')
+  if (!equipmentMatch) mismatches.push('equipamento')
+
+  return {
+    matches: mismatches.length === 0,
+    mismatches,
+    solicitante: {
+      match: personMatch,
+      request: {
+        person_id: requestPersonId,
+        name: request.requester_name || null,
+      },
+      movement: {
+        person_id: movementPersonId,
+        name: movement.recipient_name || null,
+      },
+    },
+    unidade: {
+      match: unitMatch,
+      request: {
+        unit_id: requestUnitId,
+        name: request.unit_name || null,
+      },
+      movement: {
+        unit_id: movementUnitId,
+        name: movement.destination_unit_name || null,
+      },
+    },
+    equipamento: {
+      match: equipmentMatch,
+      request_types: requestTypes,
+      movement_types: movementTypes,
+      missing_in_movement: missingTypes,
+    },
+  }
+}
+
+async function searchLinkableMovements(pool, requestId, search) {
+  const request = await repository.findById(pool, requestId)
+  if (!request) throw new Error('Solicitação não encontrada.')
+  if (!APPROVED_LIKE_STATUSES.includes(request.status)) {
+    throw new Error(
+      'Somente solicitações aprovadas ou parcialmente aprovadas podem receber vínculo retroativo.'
+    )
+  }
+  return repository.findConfirmedUnlinkedMovements(pool, { search, limit: 20 })
+}
+
+async function checkRetroactiveLink(pool, requestId, movementId) {
+  const request = await repository.findById(pool, requestId)
+  if (!request) throw new Error('Solicitação não encontrada.')
+  if (!APPROVED_LIKE_STATUSES.includes(request.status)) {
+    throw new Error(
+      'Somente solicitações aprovadas ou parcialmente aprovadas podem receber vínculo retroativo.'
+    )
+  }
+
+  const movement = await repository.findMovementForRetroactiveLink(pool, movementId)
+  if (!movement) throw new Error('Movimentação não encontrada.')
+  if (movement.request_id) {
+    throw new Error('Esta movimentação já está vinculada a uma solicitação.')
+  }
+  if (movement.delivery_status !== 'confirmed') {
+    throw new Error('Somente movimentações com entrega confirmada podem ser vinculadas retroativamente.')
+  }
+
+  const items = await repository.findCatalogItemsByRequestId(pool, requestId)
+  const match = buildRetroactiveMatchAnalysis(request, items, movement)
+  return { request_id: requestId, movement, match }
+}
+
+async function linkMovementRetroactively(pool, requestId, movementId, currentUser, options = {}) {
+  if (!LINK_MOVEMENT_ROLES.includes(currentUser.role)) {
+    throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para esta ação.`)
+  }
+
+  const confirmMismatches = Boolean(options.confirm_mismatches)
+  const preview = await checkRetroactiveLink(pool, requestId, movementId)
+  const { match, movement } = preview
+
+  if (!match.matches && !confirmMismatches) {
+    const err = new Error(
+      'Há divergências entre a solicitação e a movimentação. Confirme explicitamente para prosseguir.'
+    )
+    err.code = 'MATCH_CONFIRMATION_REQUIRED'
+    err.match = match
+    err.movement = movement
+    throw err
+  }
+
+  const linked = await repository.setMovementRequestId(pool, movementId, requestId)
+  if (!linked) {
+    throw new Error('Não foi possível vincular: a movimentação já possui solicitação ou não foi encontrada.')
+  }
+
+  const mismatchNote = match.matches
+    ? 'Correspondência total entre solicitante, unidade e equipamento.'
+    : `Divergências confirmadas pelo usuário: ${match.mismatches.join(', ')}.`
+
+  const notes =
+    options.notes?.trim() ||
+    `Vínculo retroativo com movimentação #${movementId}. ${mismatchNote}`
+
+  await repository.updateRequestStatus(
+    pool, requestId, 'confirmed', currentUser.id, notes
+  )
+
+  return getRequestById(pool, requestId, currentUser)
+}
+
 module.exports = {
   createRequest,
   listRequests,
@@ -847,6 +1012,9 @@ module.exports = {
   ditCiente,
   registrarEventoDit,
   getUnavailableQueue,
+  searchLinkableMovements,
+  checkRetroactiveLink,
+  linkMovementRetroactively,
   DELIBERATION_STATUSES,
   APPROVED_LIKE_STATUSES,
 }

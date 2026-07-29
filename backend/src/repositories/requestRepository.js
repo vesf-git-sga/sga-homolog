@@ -722,6 +722,102 @@ async function findUnavailableQueue(pool) {
   return r.rows
 }
 
+// ─── Vínculo retroativo solicitação ↔ movimentação ───────────────────────────
+
+async function findConfirmedUnlinkedMovements(pool, { search, limit = 20 } = {}) {
+  const params = []
+  const clauses = [
+    `am.request_id IS NULL`,
+    `am.delivery_status = 'confirmed'`,
+  ]
+
+  if (search && String(search).trim()) {
+    const q = String(search).trim()
+    if (/^\d+$/.test(q)) {
+      params.push(parseInt(q, 10))
+      clauses.push(`am.id = $${params.length}`)
+    } else {
+      params.push(`%${q}%`)
+      const p = params.length
+      clauses.push(`(
+        COALESCE(p.full_name, am.recipient_name) ILIKE $${p}
+        OR un.name ILIKE $${p}
+        OR EXISTS (
+          SELECT 1 FROM movement_assets ma2
+          JOIN assets a2 ON a2.id = ma2.asset_id
+          WHERE ma2.movement_id = am.id
+            AND (a2.patrimonio_number ILIKE $${p} OR a2.serial_number ILIKE $${p})
+        )
+      )`)
+    }
+  }
+
+  params.push(Math.min(parseInt(limit, 10) || 20, 50))
+  const result = await pool.query(
+    `SELECT
+       am.id, am.movement_type, am.delivery_status, am.movement_date, am.created_at,
+       am.recipient_person_id, am.destination_unit_id,
+       COALESCE(p.full_name, am.recipient_name) AS recipient_name,
+       un.name AS destination_unit_name,
+       u.full_name AS responsible_name,
+       (
+         SELECT COUNT(*)::int FROM movement_assets ma WHERE ma.movement_id = am.id
+       ) AS asset_count
+     FROM asset_movements am
+     LEFT JOIN people p ON p.id = am.recipient_person_id
+     LEFT JOIN units un ON un.id = am.destination_unit_id
+     LEFT JOIN users u ON u.id = am.responsible_user_id
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY am.movement_date DESC, am.id DESC
+     LIMIT $${params.length}`,
+    params
+  )
+  return result.rows
+}
+
+async function findMovementForRetroactiveLink(pool, movementId) {
+  const movementResult = await pool.query(
+    `SELECT
+       am.id, am.movement_type, am.delivery_status, am.movement_date, am.created_at,
+       am.request_id, am.recipient_person_id, am.destination_unit_id,
+       COALESCE(p.full_name, am.recipient_name) AS recipient_name,
+       un.name AS destination_unit_name,
+       u.full_name AS responsible_name
+     FROM asset_movements am
+     LEFT JOIN people p ON p.id = am.recipient_person_id
+     LEFT JOIN units un ON un.id = am.destination_unit_id
+     LEFT JOIN users u ON u.id = am.responsible_user_id
+     WHERE am.id = $1`,
+    [movementId]
+  )
+  if (!movementResult.rows.length) return null
+
+  const movement = movementResult.rows[0]
+  const assetsResult = await pool.query(
+    `SELECT a.id, a.item_type_id, a.patrimonio_number, a.brand, a.model,
+            it.name AS item_type_name
+     FROM movement_assets ma
+     JOIN assets a ON a.id = ma.asset_id
+     LEFT JOIN item_types it ON it.id = a.item_type_id
+     WHERE ma.movement_id = $1
+     ORDER BY a.id`,
+    [movementId]
+  )
+  movement.assets = assetsResult.rows
+  return movement
+}
+
+async function setMovementRequestId(pool, movementId, requestId) {
+  const result = await pool.query(
+    `UPDATE asset_movements
+     SET request_id = $1
+     WHERE id = $2 AND request_id IS NULL
+     RETURNING id, request_id, delivery_status`,
+    [requestId, movementId]
+  )
+  return result.rows[0] || null
+}
+
 module.exports = {
   create,
   findById,
@@ -750,4 +846,7 @@ module.exports = {
   markDitCiente,
   criarEventoDit,
   findUnavailableQueue,
+  findConfirmedUnlinkedMovements,
+  findMovementForRetroactiveLink,
+  setMovementRequestId,
 }

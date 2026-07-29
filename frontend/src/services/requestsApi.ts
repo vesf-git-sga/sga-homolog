@@ -87,6 +87,54 @@ export interface ApprovedPrefill {
   requester_person_id: number
 }
 
+export interface LinkableMovement {
+  id: number
+  movement_type: string
+  delivery_status: string
+  movement_date?: string
+  created_at: string
+  recipient_person_id?: number | null
+  destination_unit_id?: number | null
+  recipient_name?: string | null
+  destination_unit_name?: string | null
+  responsible_name?: string | null
+  asset_count: number
+}
+
+export interface LinkMatchCheck {
+  match: boolean
+  request: { person_id?: number | null; name?: string | null; unit_id?: number | null }
+  movement: { person_id?: number | null; name?: string | null; unit_id?: number | null }
+}
+
+export interface LinkEquipmentMatch {
+  match: boolean
+  request_types: Array<{ item_type_id: number; item_type_name?: string; quantity: number }>
+  movement_types: Array<{ item_type_id: number; item_type_name?: string; quantity: number }>
+  missing_in_movement: Array<{ item_type_id: number; item_type_name?: string; quantity: number }>
+}
+
+export interface LinkMatchAnalysis {
+  matches: boolean
+  mismatches: string[]
+  solicitante: LinkMatchCheck
+  unidade: LinkMatchCheck
+  equipamento: LinkEquipmentMatch
+}
+
+export interface LinkMovementCheckResult {
+  request_id: number
+  movement: LinkableMovement & {
+    assets?: Array<{
+      id: number
+      item_type_id?: number | null
+      item_type_name?: string | null
+      patrimonio_number?: string | null
+    }>
+  }
+  match: LinkMatchAnalysis
+}
+
 export interface MovementPrefillItem {
   catalog_item_id?: number
   item_type_name: string
@@ -170,6 +218,26 @@ export const requestsApi = {
 
   getUnavailableQueue: () =>
     axios.get<UnavailableQueueEntry[]>(`${API_URL}/requests/unavailable-queue`).then(r => r.data),
+
+  searchLinkableMovements: (id: number, search?: string) =>
+    axios
+      .get<LinkableMovement[]>(`${API_URL}/requests/${id}/linkable-movements`, {
+        params: search ? { search } : {},
+      })
+      .then(r => r.data),
+
+  checkLinkMovement: (id: number, movementId: number) =>
+    axios
+      .get<LinkMovementCheckResult>(`${API_URL}/requests/${id}/link-movement-check`, {
+        params: { movement_id: movementId },
+      })
+      .then(r => r.data),
+
+  linkMovement: (
+    id: number,
+    payload: { movement_id: number; confirm_mismatches?: boolean; notes?: string },
+  ) =>
+    axios.post<EquipmentRequest>(`${API_URL}/requests/${id}/link-movement`, payload).then(r => r.data),
 
   // ─── Catálogo ───────────────────────────────────────────────────────────
   listItemTypes: () =>

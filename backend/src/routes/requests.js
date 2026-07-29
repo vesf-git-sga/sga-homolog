@@ -121,5 +121,18 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
     authorizePermission('ACTION_REGISTER_MOVEMENT'),
     (req, res) => controller.getApprovedPrefill(req, res, pool))
 
+  // ─── Vínculo retroativo com movimentação concluída ───────────────────────
+  router.get('/requests/:id/linkable-movements', authenticateToken,
+    authorizePermission('ACTION_REGISTER_MOVEMENT'),
+    (req, res) => controller.searchLinkableMovements(req, res, pool))
+
+  router.get('/requests/:id/link-movement-check', authenticateToken,
+    authorizePermission('ACTION_REGISTER_MOVEMENT'),
+    (req, res) => controller.checkRetroactiveLink(req, res, pool))
+
+  router.post('/requests/:id/link-movement', authenticateToken,
+    authorizePermission('ACTION_REGISTER_MOVEMENT'),
+    (req, res) => controller.linkMovementRetroactively(req, res, pool, logAudit))
+
   return router
 }
