@@ -44,7 +44,8 @@ const getActionMeta = (type: string) => {
     'create_movement_return': { label: 'Devolução', color: 'bg-green-100 text-green-700', icon: CheckCircle },
     'create_movement_exit': { label: 'Saída Definitiva', color: 'bg-orange-100 text-orange-700', icon: Truck },
     'confirm_delivery': { label: 'Entrega Confirmada', color: 'bg-teal-100 text-teal-700', icon: CheckCircle },
-    
+    'request_retroactive_movement_link': { label: 'Vínculo Retroativo', color: 'bg-teal-100 text-teal-800', icon: Truck },
+
     // Manutenção / Baixa
     'retire_asset': { label: 'Baixa de Bem', color: 'bg-red-100 text-red-800', icon: Trash2 },
     'sim_swap': { label: 'Troca de Chip', color: 'bg-pink-100 text-pink-700', icon: Smartphone },

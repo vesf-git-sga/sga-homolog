@@ -296,6 +296,92 @@ async function getUnavailableQueue(req, res, pool) {
   }
 }
 
+async function searchLinkableMovements(req, res, pool) {
+  try {
+    const requestId = parseInt(req.params.id)
+    const movements = await service.searchLinkableMovements(pool, requestId, req.query.search)
+    res.status(200).json(movements)
+  } catch (err) {
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('aprovadas') ||
+      err.message.includes('já possui movimentação')
+        ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
+async function checkRetroactiveLink(req, res, pool) {
+  try {
+    const requestId = parseInt(req.params.id)
+    const movementId = parseInt(req.query.movement_id)
+    if (!movementId) {
+      return res.status(400).json({ message: 'Parâmetro movement_id é obrigatório.' })
+    }
+    const result = await service.checkRetroactiveLink(pool, requestId, movementId)
+    res.status(200).json(result)
+  } catch (err) {
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('aprovadas') || err.message.includes('vinculada') ||
+      err.message.includes('confirmada') || err.message.includes('já possui') ||
+      err.message.includes('não é elegível')
+        ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
+async function linkMovementRetroactively(req, res, pool, logAudit) {
+  try {
+    const requestId = parseInt(req.params.id)
+    const { movement_id, confirm_mismatches, notes } = req.body || {}
+    const movementId = parseInt(movement_id)
+    if (!movementId) {
+      return res.status(400).json({ message: 'movement_id é obrigatório.' })
+    }
+
+    const { request, linkMeta } = await service.linkMovementRetroactively(
+      pool, requestId, movementId, req.user,
+      { confirm_mismatches, notes }
+    )
+
+    await logAudit(
+      req.user.id,
+      'request_retroactive_movement_link',
+      'requests',
+      requestId,
+      {
+        movement_id: movementId,
+        confirm_mismatches: Boolean(linkMeta?.confirm_mismatches),
+        matches: Boolean(linkMeta?.matches),
+        mismatches: linkMeta?.mismatches || [],
+        notes: linkMeta?.notes || notes || null,
+      },
+      req.ip
+    )
+
+    res.status(200).json(request)
+  } catch (err) {
+    if (err.code === 'MATCH_CONFIRMATION_REQUIRED') {
+      return res.status(409).json({
+        message: err.message,
+        code: err.code,
+        match: err.match,
+        movement: err.movement,
+      })
+    }
+    const status =
+      err.message.includes('não encontrada') ? 404 :
+      err.message.includes('permissão') || err.message.includes('aprovadas') ||
+      err.message.includes('vinculada') || err.message.includes('confirmada') ||
+      err.message.includes('obrigatório') || err.message.includes('Não foi possível') ||
+      err.message.includes('já possui') || err.message.includes('não é elegível') ||
+      err.message.includes('não está mais aprovada')
+        ? 400 : 500
+    res.status(status).json({ message: err.message })
+  }
+}
+
 module.exports = {
   create,
   list,
@@ -314,4 +400,7 @@ module.exports = {
   ackDitCiente,
   registrarEventoDit,
   getUnavailableQueue,
+  searchLinkableMovements,
+  checkRetroactiveLink,
+  linkMovementRetroactively,
 }

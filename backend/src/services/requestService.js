@@ -829,6 +829,252 @@ async function getUnavailableQueue(pool) {
   return repository.findUnavailableQueue(pool)
 }
 
+// ─── Vínculo retroativo com movimentação concluída ───────────────────────────
+
+const LINK_MOVEMENT_ROLES = ['admin', 'manager', 'basic', 'operator']
+const LINKABLE_MOVEMENT_TYPES = repository.LINKABLE_MOVEMENT_TYPES || ['loan', 'exit']
+
+function buildRetroactiveMatchAnalysis(request, items, movement) {
+  const requestPersonId = request.requester_person_id
+  const movementPersonId = movement.recipient_person_id
+  const personMatch =
+    requestPersonId != null &&
+    movementPersonId != null &&
+    Number(requestPersonId) === Number(movementPersonId)
+
+  const requestUnitId = request.unit_id
+  const movementUnitId = movement.destination_unit_id
+  const unitMatch =
+    requestUnitId != null &&
+    movementUnitId != null &&
+    Number(requestUnitId) === Number(movementUnitId)
+
+  const approvedItems = (items || []).filter((item) => {
+    if (!item.deliberation) return request.status === 'aprovado'
+    return item.deliberation.decision === 'aprovado'
+  })
+  const fallbackItems =
+    approvedItems.length > 0 ? approvedItems : (items || [])
+
+  // Agrega quantidades por tipo na solicitação
+  const requestTypeCounts = new Map()
+  for (const item of fallbackItems) {
+    if (item.item_type_id == null) continue
+    const key = Number(item.item_type_id)
+    const qty = Number(item.deliberation?.approved_quantity ?? item.quantity) || 0
+    const prev = requestTypeCounts.get(key) || {
+      item_type_id: key,
+      item_type_name: item.item_type_name,
+      quantity: 0,
+    }
+    prev.quantity += qty
+    if (!prev.item_type_name && item.item_type_name) {
+      prev.item_type_name = item.item_type_name
+    }
+    requestTypeCounts.set(key, prev)
+  }
+  const requestTypes = Array.from(requestTypeCounts.values())
+
+  const movementTypeCounts = new Map()
+  for (const asset of movement.assets || []) {
+    if (asset.item_type_id == null) continue
+    const key = Number(asset.item_type_id)
+    const prev = movementTypeCounts.get(key) || {
+      item_type_id: key,
+      item_type_name: asset.item_type_name,
+      quantity: 0,
+    }
+    prev.quantity += 1
+    movementTypeCounts.set(key, prev)
+  }
+  const movementTypes = Array.from(movementTypeCounts.values())
+
+  const missingInMovement = []
+  const quantityShortfalls = []
+  for (const rt of requestTypes) {
+    const found = movementTypeCounts.get(Number(rt.item_type_id))
+    if (!found || found.quantity === 0) {
+      missingInMovement.push({ ...rt })
+      continue
+    }
+    if (found.quantity < rt.quantity) {
+      quantityShortfalls.push({
+        item_type_id: rt.item_type_id,
+        item_type_name: rt.item_type_name,
+        requested: rt.quantity,
+        found: found.quantity,
+        quantity: rt.quantity - found.quantity,
+      })
+    }
+  }
+
+  const extraInMovement = movementTypes.filter(
+    (mt) => !requestTypeCounts.has(Number(mt.item_type_id))
+  )
+
+  const equipmentMatch =
+    missingInMovement.length === 0 &&
+    quantityShortfalls.length === 0 &&
+    extraInMovement.length === 0
+
+  const mismatches = []
+  if (!personMatch) mismatches.push('solicitante')
+  if (!unitMatch) mismatches.push('unidade')
+  if (!equipmentMatch) mismatches.push('equipamento')
+
+  return {
+    matches: mismatches.length === 0,
+    mismatches,
+    solicitante: {
+      match: personMatch,
+      request: {
+        person_id: requestPersonId,
+        name: request.requester_name || null,
+      },
+      movement: {
+        person_id: movementPersonId,
+        name: movement.recipient_name || null,
+      },
+    },
+    unidade: {
+      match: unitMatch,
+      request: {
+        unit_id: requestUnitId,
+        name: request.unit_name || null,
+      },
+      movement: {
+        unit_id: movementUnitId,
+        name: movement.destination_unit_name || null,
+      },
+    },
+    equipamento: {
+      match: equipmentMatch,
+      request_types: requestTypes,
+      movement_types: movementTypes,
+      missing_in_movement: missingInMovement,
+      quantity_shortfalls: quantityShortfalls,
+      extra_in_movement: extraInMovement,
+    },
+  }
+}
+
+function assertRequestEligibleForRetroactiveLink(request) {
+  if (!request) throw new Error('Solicitação não encontrada.')
+  if (!APPROVED_LIKE_STATUSES.includes(request.status)) {
+    throw new Error(
+      'Somente solicitações aprovadas ou parcialmente aprovadas podem receber vínculo retroativo.'
+    )
+  }
+}
+
+function assertMovementEligibleForRetroactiveLink(movement) {
+  if (!movement) throw new Error('Movimentação não encontrada.')
+  if (movement.request_id) {
+    throw new Error('Esta movimentação já está vinculada a uma solicitação.')
+  }
+  if (movement.delivery_status !== 'confirmed') {
+    throw new Error(
+      'Somente movimentações com entrega confirmada podem ser vinculadas retroativamente.'
+    )
+  }
+  if (!LINKABLE_MOVEMENT_TYPES.includes(movement.movement_type)) {
+    throw new Error(
+      `Tipo de movimentação "${movement.movement_type}" não é elegível para vínculo retroativo com solicitação de TI.`
+    )
+  }
+}
+
+function buildRetroactiveLinkNotes(movementId, match, userNotes) {
+  const mismatchNote = match.matches
+    ? 'Correspondência total entre solicitante, unidade e equipamento.'
+    : `Divergências confirmadas pelo usuário: ${match.mismatches.join(', ')}.`
+
+  const parts = [
+    `Vínculo retroativo com movimentação #${movementId}.`,
+    mismatchNote,
+  ]
+  const trimmed = userNotes?.trim()
+  if (trimmed) parts.push(`Observação: ${trimmed}`)
+  return parts.join(' ')
+}
+
+async function searchLinkableMovements(pool, requestId, search) {
+  const request = await repository.findById(pool, requestId)
+  assertRequestEligibleForRetroactiveLink(request)
+
+  const existingCount = await repository.countMovementsByRequestId(pool, requestId)
+  if (existingCount > 0) {
+    throw new Error('Esta solicitação já possui movimentação vinculada.')
+  }
+
+  return repository.findConfirmedUnlinkedMovements(pool, {
+    search,
+    limit: 20,
+    affinityPersonId: request.requester_person_id,
+    affinityUnitId: request.unit_id,
+    allowedTypes: LINKABLE_MOVEMENT_TYPES,
+  })
+}
+
+async function checkRetroactiveLink(pool, requestId, movementId) {
+  const request = await repository.findById(pool, requestId)
+  assertRequestEligibleForRetroactiveLink(request)
+
+  const existingCount = await repository.countMovementsByRequestId(pool, requestId)
+  if (existingCount > 0) {
+    throw new Error('Esta solicitação já possui movimentação vinculada.')
+  }
+
+  const movement = await repository.findMovementForRetroactiveLink(pool, movementId)
+  assertMovementEligibleForRetroactiveLink(movement)
+
+  const items = await repository.findCatalogItemsByRequestId(pool, requestId)
+  const match = buildRetroactiveMatchAnalysis(request, items, movement)
+  return { request_id: requestId, movement, match }
+}
+
+async function linkMovementRetroactively(pool, requestId, movementId, currentUser, options = {}) {
+  if (!LINK_MOVEMENT_ROLES.includes(currentUser.role)) {
+    throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para esta ação.`)
+  }
+
+  const confirmMismatches = Boolean(options.confirm_mismatches)
+  const preview = await checkRetroactiveLink(pool, requestId, movementId)
+  const { match, movement } = preview
+
+  if (!match.matches && !confirmMismatches) {
+    const err = new Error(
+      'Há divergências entre a solicitação e a movimentação. Confirme explicitamente para prosseguir.'
+    )
+    err.code = 'MATCH_CONFIRMATION_REQUIRED'
+    err.match = match
+    err.movement = movement
+    throw err
+  }
+
+  const notes = buildRetroactiveLinkNotes(movementId, match, options.notes)
+
+  await repository.linkMovementAndConcludeRequest(pool, {
+    requestId,
+    movementId,
+    userId: currentUser.id,
+    notes,
+    allowedStatuses: APPROVED_LIKE_STATUSES,
+    allowedMovementTypes: LINKABLE_MOVEMENT_TYPES,
+  })
+
+  const request = await getRequestById(pool, requestId, currentUser)
+  return {
+    request,
+    linkMeta: {
+      matches: match.matches,
+      mismatches: match.mismatches,
+      confirm_mismatches: confirmMismatches,
+      notes,
+    },
+  }
+}
+
 module.exports = {
   createRequest,
   listRequests,
@@ -847,6 +1093,9 @@ module.exports = {
   ditCiente,
   registrarEventoDit,
   getUnavailableQueue,
+  searchLinkableMovements,
+  checkRetroactiveLink,
+  linkMovementRetroactively,
   DELIBERATION_STATUSES,
   APPROVED_LIKE_STATUSES,
 }

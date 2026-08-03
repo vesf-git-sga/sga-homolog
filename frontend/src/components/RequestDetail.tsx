@@ -8,10 +8,18 @@ import {
 	Download,
 	AlertTriangle,
 	CheckCheck,
+	Link2,
+	Search,
+	CheckCircle2,
+	XCircle,
 } from 'lucide-react';
 import { useToast, AuthContext } from '../App';
 import StatusBadge from './StatusBadge';
-import { requestsApi } from '../services/requestsApi';
+import {
+	requestsApi,
+	LinkableMovement,
+	LinkMatchAnalysis,
+} from '../services/requestsApi';
 import {
 	EquipmentRequest,
 	StatusHistoryEntry,
@@ -39,6 +47,21 @@ const DELIBERATION_STATUSES = new Set([
 ]);
 
 const APPROVED_LIKE_STATUSES = new Set(['aprovado', 'parcialmente_aprovado']);
+
+const CAN_LINK_MOVEMENT_ROLES = new Set([
+	'admin',
+	'manager',
+	'basic',
+	'operator',
+]);
+
+const MOVEMENT_TYPE_LABELS: Record<string, string> = {
+	loan: 'Empréstimo',
+	exit: 'Saída',
+	return: 'Devolução',
+	maintenance: 'Manutenção',
+	entry: 'Entrada',
+};
 
 type ItemVisitDraft = Record<
 	number,
@@ -285,6 +308,21 @@ const RequestDetail = ({
 	const [showObsForm, setShowObsForm] = useState(false);
 	const [obsMotivo, setObsMotivo] = useState('');
 
+	// Vínculo retroativo com movimentação
+	const [showLinkModal, setShowLinkModal] = useState(false);
+	const [linkSearch, setLinkSearch] = useState('');
+	const [linkResults, setLinkResults] = useState<LinkableMovement[]>([]);
+	const [linkSearching, setLinkSearching] = useState(false);
+	const [selectedLinkMovement, setSelectedLinkMovement] =
+		useState<LinkableMovement | null>(null);
+	const [linkMatch, setLinkMatch] = useState<LinkMatchAnalysis | null>(null);
+	const [linkChecking, setLinkChecking] = useState(false);
+	const [confirmMismatches, setConfirmMismatches] = useState(false);
+	const [linkNotes, setLinkNotes] = useState('');
+	const [isLinking, setIsLinking] = useState(false);
+
+	const canLinkMovement = CAN_LINK_MOVEMENT_ROLES.has(currentUserRole);
+
 	const loadRequest = useCallback(async () => {
 		setIsLoading(true);
 		try {
@@ -334,6 +372,111 @@ const RequestDetail = ({
 		}
 	};
 
+
+	const resetLinkModal = () => {
+		setShowLinkModal(false);
+		setLinkSearch('');
+		setLinkResults([]);
+		setSelectedLinkMovement(null);
+		setLinkMatch(null);
+		setConfirmMismatches(false);
+		setLinkNotes('');
+	};
+
+	const handleSearchLinkableMovements = async () => {
+		setLinkSearching(true);
+		setSelectedLinkMovement(null);
+		setLinkMatch(null);
+		setConfirmMismatches(false);
+		try {
+			const results = await requestsApi.searchLinkableMovements(
+				requestId,
+				linkSearch.trim() || undefined,
+			);
+			setLinkResults(results);
+			if (results.length === 0) {
+				addToast(
+					linkSearch.trim()
+						? 'Nenhuma movimentação elegível encontrada para o termo informado.'
+						: 'Nenhuma sugestão por afinidade. Informe ID, solicitante, unidade ou patrimônio.',
+					'info',
+				);
+			}
+		} catch (err: any) {
+			addToast(
+				err?.response?.data?.message ||
+					'Erro ao buscar movimentações.',
+				'error',
+			);
+		} finally {
+			setLinkSearching(false);
+		}
+	};
+
+	const handleSelectLinkMovement = async (movement: LinkableMovement) => {
+		setSelectedLinkMovement(movement);
+		setConfirmMismatches(false);
+		setLinkChecking(true);
+		try {
+			const check = await requestsApi.checkLinkMovement(
+				requestId,
+				movement.id,
+			);
+			setLinkMatch(check.match);
+		} catch (err: any) {
+			setSelectedLinkMovement(null);
+			setLinkMatch(null);
+			addToast(
+				err?.response?.data?.message ||
+					'Erro ao analisar correspondência.',
+				'error',
+			);
+		} finally {
+			setLinkChecking(false);
+		}
+	};
+
+	const handleConfirmLinkMovement = async () => {
+		if (!selectedLinkMovement || !linkMatch) return;
+		if (!linkMatch.matches && !confirmMismatches) {
+			addToast(
+				'Confirme explicitamente o vínculo apesar das divergências.',
+				'error',
+			);
+			return;
+		}
+		setIsLinking(true);
+		try {
+			await requestsApi.linkMovement(requestId, {
+				movement_id: selectedLinkMovement.id,
+				confirm_mismatches: !linkMatch.matches,
+				notes: linkNotes.trim() || undefined,
+			});
+			addToast(
+				'Movimentação vinculada e solicitação concluída com sucesso.',
+				'success',
+			);
+			resetLinkModal();
+			setActiveTab('movements');
+			await loadRequest();
+		} catch (err: any) {
+			if (err?.response?.status === 409 && err?.response?.data?.match) {
+				setLinkMatch(err.response.data.match);
+				addToast(
+					'Há divergências. Confirme explicitamente para prosseguir.',
+					'error',
+				);
+			} else {
+				addToast(
+					err?.response?.data?.message ||
+						'Erro ao vincular movimentação.',
+					'error',
+				);
+			}
+		} finally {
+			setIsLinking(false);
+		}
+	};
 
 	const handleDitCiente = async () => {
 		if (!request) return;
@@ -2107,6 +2250,33 @@ const RequestDetail = ({
 							{/* ── Aba Movimentações ── */}
 							{activeTab === 'movements' && (
 								<div className="space-y-3">
+									{canLinkMovement &&
+										APPROVED_LIKE_STATUSES.has(
+											request.status,
+										) &&
+										(!request.movements ||
+											request.movements.length === 0) && (
+											<div className="flex justify-end">
+												<button
+													type="button"
+													onClick={() => {
+														setShowLinkModal(true);
+														setLinkResults([]);
+														setSelectedLinkMovement(
+															null,
+														);
+														setLinkMatch(null);
+														setConfirmMismatches(
+															false,
+														);
+													}}
+													className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-teal-600 hover:bg-teal-700 text-white"
+												>
+													<Link2 size={14} />
+													Vincular movimentação
+												</button>
+											</div>
+										)}
 									{(
 										!request.movements ||
 										request.movements.length === 0
@@ -2146,6 +2316,20 @@ const RequestDetail = ({
 														atualizado
 														automaticamente.
 													</p>
+													{canLinkMovement && (
+														<p className="mt-2">
+															Se a movimentação já
+															foi concluída sem o
+															protocolo, use{' '}
+															<span className="font-medium">
+																Vincular
+																movimentação
+															</span>{' '}
+															acima para corrigir
+															o vínculo
+															retroativamente.
+														</p>
+													)}
 												</div>
 											)}
 											{request.status ===
@@ -2301,6 +2485,342 @@ const RequestDetail = ({
 					</>
 				}
 			</div>
+
+			{showLinkModal && (
+				<div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 p-4">
+					<div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+						<div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+							<div>
+								<h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+									<Link2 size={18} className="text-teal-600" />
+									Vincular movimentação concluída
+								</h3>
+								<p className="text-xs text-gray-500 mt-0.5">
+									Busque por ID, solicitante, unidade ou patrimônio.
+									Sem termo, listamos apenas empréstimos/saídas com
+									afinidade de solicitante ou unidade.
+								</p>
+							</div>
+							<button
+								type="button"
+								onClick={resetLinkModal}
+								className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+							>
+								<X size={18} />
+							</button>
+						</div>
+
+						<div className="px-5 py-4 overflow-y-auto space-y-4 flex-1">
+							<div className="flex gap-2">
+								<input
+									type="text"
+									value={linkSearch}
+									onChange={(e) => setLinkSearch(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === 'Enter') {
+											e.preventDefault();
+											handleSearchLinkableMovements();
+										}
+									}}
+									placeholder="ID, solicitante, unidade ou patrimônio…"
+									className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-300"
+								/>
+								<button
+									type="button"
+									onClick={handleSearchLinkableMovements}
+									disabled={linkSearching}
+									className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg bg-gray-800 hover:bg-gray-900 text-white disabled:opacity-60"
+								>
+									<Search size={14} />
+									{linkSearching ? 'Buscando…' : 'Buscar'}
+								</button>
+							</div>
+
+							{linkResults.length > 0 && (
+								<div className="space-y-2">
+									<p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+										Resultados
+									</p>
+									{linkResults.map((m) => {
+										const selected =
+											selectedLinkMovement?.id === m.id;
+										return (
+											<button
+												key={m.id}
+												type="button"
+												onClick={() =>
+													handleSelectLinkMovement(m)
+												}
+												className={`w-full text-left p-3 rounded-lg border transition-colors ${
+													selected
+														? 'border-teal-500 bg-teal-50'
+														: 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+												}`}
+											>
+												<div className="flex items-center justify-between gap-2">
+													<span className="text-sm font-semibold text-gray-800">
+														#{m.id} ·{' '}
+														{MOVEMENT_TYPE_LABELS[
+															m.movement_type
+														] || m.movement_type}
+													</span>
+													<span className="text-xs text-gray-500">
+														{m.asset_count} ativo(s)
+													</span>
+												</div>
+												<p className="text-xs text-gray-600 mt-1">
+													{m.recipient_name ||
+														'Sem solicitante'}{' '}
+													·{' '}
+													{m.destination_unit_name ||
+														'Sem unidade'}
+												</p>
+												<p className="text-xs text-gray-400 mt-0.5">
+													{m.movement_date
+														? new Date(
+																m.movement_date,
+															).toLocaleDateString(
+																'pt-BR',
+															)
+														: new Date(
+																m.created_at,
+															).toLocaleDateString(
+																'pt-BR',
+															)}
+													{m.responsible_name
+														? ` · ${m.responsible_name}`
+														: ''}
+												</p>
+											</button>
+										);
+									})}
+								</div>
+							)}
+
+							{linkChecking && (
+								<p className="text-sm text-gray-500">
+									Analisando correspondência…
+								</p>
+							)}
+
+							{linkMatch && selectedLinkMovement && !linkChecking && (
+								<div
+									className={`rounded-lg border p-3 space-y-3 ${
+										linkMatch.matches
+											? 'border-green-200 bg-green-50'
+											: 'border-amber-300 bg-amber-50'
+									}`}
+								>
+									<p
+										className={`text-sm font-semibold flex items-center gap-1.5 ${
+											linkMatch.matches
+												? 'text-green-800'
+												: 'text-amber-900'
+										}`}
+									>
+										{linkMatch.matches ?
+											<>
+												<CheckCircle2 size={16} />
+												Correspondência completa
+											</>
+										:	<>
+												<AlertTriangle size={16} />
+												Atenção: há divergências
+											</>
+										}
+									</p>
+
+									{(
+										[
+											[
+												'Solicitante',
+												linkMatch.solicitante,
+											],
+											['Unidade', linkMatch.unidade],
+										] as const
+									).map(([label, check]) => (
+										<div
+											key={label}
+											className="text-xs grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5"
+										>
+											<span className="font-semibold text-gray-700 flex items-center gap-1 col-span-2">
+												{check.match ?
+													<CheckCircle2
+														size={12}
+														className="text-green-600"
+													/>
+												:	<XCircle
+														size={12}
+														className="text-amber-600"
+													/>
+												}
+												{label}
+											</span>
+											<span className="text-gray-500">
+												Solicitação:
+											</span>
+											<span className="text-gray-800">
+												{check.request.name || '—'}
+											</span>
+											<span className="text-gray-500">
+												Movimentação:
+											</span>
+											<span className="text-gray-800">
+												{check.movement.name || '—'}
+											</span>
+										</div>
+									))}
+
+									<div className="text-xs space-y-1">
+										<p className="font-semibold text-gray-700 flex items-center gap-1">
+											{linkMatch.equipamento.match ?
+												<CheckCircle2
+													size={12}
+													className="text-green-600"
+												/>
+											:	<XCircle
+													size={12}
+													className="text-amber-600"
+												/>
+											}
+											Equipamento
+										</p>
+										<p className="text-gray-600">
+											Solicitação:{' '}
+											{linkMatch.equipamento.request_types
+												.length > 0
+												? linkMatch.equipamento.request_types
+														.map(
+															(t) =>
+																`${t.item_type_name || 'Tipo'} (qtd ${t.quantity})`,
+														)
+														.join(', ')
+												: '—'}
+										</p>
+										<p className="text-gray-600">
+											Movimentação:{' '}
+											{linkMatch.equipamento
+												.movement_types.length > 0
+												? linkMatch.equipamento.movement_types
+														.map(
+															(t) =>
+																`${t.item_type_name || 'Tipo'} (qtd ${t.quantity})`,
+														)
+														.join(', ')
+												: '—'}
+										</p>
+										{(linkMatch.equipamento.missing_in_movement
+											?.length ?? 0) > 0 && (
+											<p className="text-amber-800">
+												Ausentes na movimentação:{' '}
+												{(
+													linkMatch.equipamento
+														.missing_in_movement || []
+												)
+													.map(
+														(t) =>
+															`${t.item_type_name || 'Tipo'} (qtd ${t.quantity})`,
+													)
+													.join(', ')}
+											</p>
+										)}
+										{(linkMatch.equipamento.quantity_shortfalls
+											?.length ?? 0) > 0 && (
+											<p className="text-amber-800">
+												Quantidade insuficiente:{' '}
+												{(
+													linkMatch.equipamento
+														.quantity_shortfalls || []
+												)
+													.map(
+														(t) =>
+															`${t.item_type_name || 'Tipo'} (solicitado ${t.requested}, encontrado ${t.found})`,
+													)
+													.join(', ')}
+											</p>
+										)}
+										{(linkMatch.equipamento.extra_in_movement
+											?.length ?? 0) > 0 && (
+											<p className="text-amber-800">
+												Extras na movimentação:{' '}
+												{(
+													linkMatch.equipamento
+														.extra_in_movement || []
+												)
+													.map(
+														(t) =>
+															`${t.item_type_name || 'Tipo'} (qtd ${t.quantity})`,
+													)
+													.join(', ')}
+											</p>
+										)}
+									</div>
+
+									{!linkMatch.matches && (
+										<label className="flex items-start gap-2 text-xs text-amber-900 cursor-pointer pt-1 border-t border-amber-200">
+											<input
+												type="checkbox"
+												checked={confirmMismatches}
+												onChange={(e) =>
+													setConfirmMismatches(
+														e.target.checked,
+													)
+												}
+												className="mt-0.5"
+											/>
+											<span>
+												Confirmo o vínculo retroativo
+												mesmo com as divergências
+												destacadas (
+												{linkMatch.mismatches.join(
+													', ',
+												)}
+												).
+											</span>
+										</label>
+									)}
+
+									<textarea
+										rows={2}
+										value={linkNotes}
+										onChange={(e) =>
+											setLinkNotes(e.target.value)
+										}
+										placeholder="Observação opcional sobre o vínculo…"
+										className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-300 resize-none bg-white"
+									/>
+								</div>
+							)}
+						</div>
+
+						<div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2 shrink-0">
+							<button
+								type="button"
+								onClick={resetLinkModal}
+								className="px-3 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+							>
+								Cancelar
+							</button>
+							<button
+								type="button"
+								onClick={handleConfirmLinkMovement}
+								disabled={
+									isLinking ||
+									!selectedLinkMovement ||
+									!linkMatch ||
+									linkChecking ||
+									(!linkMatch.matches && !confirmMismatches)
+								}
+								className="px-4 py-2 text-sm rounded-lg font-medium bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50"
+							>
+								{isLinking
+									? 'Vinculando…'
+									: 'Confirmar vínculo'}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 };
