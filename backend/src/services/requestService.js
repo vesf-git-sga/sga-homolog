@@ -832,6 +832,7 @@ async function getUnavailableQueue(pool) {
 // ─── Vínculo retroativo com movimentação concluída ───────────────────────────
 
 const LINK_MOVEMENT_ROLES = ['admin', 'manager', 'basic', 'operator']
+const LINKABLE_MOVEMENT_TYPES = repository.LINKABLE_MOVEMENT_TYPES || ['loan', 'exit']
 
 function buildRetroactiveMatchAnalysis(request, items, movement) {
   const requestPersonId = request.requester_person_id
@@ -855,11 +856,24 @@ function buildRetroactiveMatchAnalysis(request, items, movement) {
   const fallbackItems =
     approvedItems.length > 0 ? approvedItems : (items || [])
 
-  const requestTypes = fallbackItems.map((item) => ({
-    item_type_id: item.item_type_id,
-    item_type_name: item.item_type_name,
-    quantity: item.deliberation?.approved_quantity ?? item.quantity,
-  }))
+  // Agrega quantidades por tipo na solicitação
+  const requestTypeCounts = new Map()
+  for (const item of fallbackItems) {
+    if (item.item_type_id == null) continue
+    const key = Number(item.item_type_id)
+    const qty = Number(item.deliberation?.approved_quantity ?? item.quantity) || 0
+    const prev = requestTypeCounts.get(key) || {
+      item_type_id: key,
+      item_type_name: item.item_type_name,
+      quantity: 0,
+    }
+    prev.quantity += qty
+    if (!prev.item_type_name && item.item_type_name) {
+      prev.item_type_name = item.item_type_name
+    }
+    requestTypeCounts.set(key, prev)
+  }
+  const requestTypes = Array.from(requestTypeCounts.values())
 
   const movementTypeCounts = new Map()
   for (const asset of movement.assets || []) {
@@ -875,12 +889,33 @@ function buildRetroactiveMatchAnalysis(request, items, movement) {
   }
   const movementTypes = Array.from(movementTypeCounts.values())
 
-  const missingTypes = requestTypes.filter(
-    (rt) => !movementTypeCounts.has(Number(rt.item_type_id))
+  const missingInMovement = []
+  const quantityShortfalls = []
+  for (const rt of requestTypes) {
+    const found = movementTypeCounts.get(Number(rt.item_type_id))
+    if (!found || found.quantity === 0) {
+      missingInMovement.push({ ...rt })
+      continue
+    }
+    if (found.quantity < rt.quantity) {
+      quantityShortfalls.push({
+        item_type_id: rt.item_type_id,
+        item_type_name: rt.item_type_name,
+        requested: rt.quantity,
+        found: found.quantity,
+        quantity: rt.quantity - found.quantity,
+      })
+    }
+  }
+
+  const extraInMovement = movementTypes.filter(
+    (mt) => !requestTypeCounts.has(Number(mt.item_type_id))
   )
-  const equipmentMatch = requestTypes.length === 0
-    ? movementTypes.length === 0
-    : missingTypes.length === 0
+
+  const equipmentMatch =
+    missingInMovement.length === 0 &&
+    quantityShortfalls.length === 0 &&
+    extraInMovement.length === 0
 
   const mismatches = []
   if (!personMatch) mismatches.push('solicitante')
@@ -916,39 +951,82 @@ function buildRetroactiveMatchAnalysis(request, items, movement) {
       match: equipmentMatch,
       request_types: requestTypes,
       movement_types: movementTypes,
-      missing_in_movement: missingTypes,
+      missing_in_movement: missingInMovement,
+      quantity_shortfalls: quantityShortfalls,
+      extra_in_movement: extraInMovement,
     },
   }
 }
 
-async function searchLinkableMovements(pool, requestId, search) {
-  const request = await repository.findById(pool, requestId)
+function assertRequestEligibleForRetroactiveLink(request) {
   if (!request) throw new Error('Solicitação não encontrada.')
   if (!APPROVED_LIKE_STATUSES.includes(request.status)) {
     throw new Error(
       'Somente solicitações aprovadas ou parcialmente aprovadas podem receber vínculo retroativo.'
     )
   }
-  return repository.findConfirmedUnlinkedMovements(pool, { search, limit: 20 })
 }
 
-async function checkRetroactiveLink(pool, requestId, movementId) {
-  const request = await repository.findById(pool, requestId)
-  if (!request) throw new Error('Solicitação não encontrada.')
-  if (!APPROVED_LIKE_STATUSES.includes(request.status)) {
-    throw new Error(
-      'Somente solicitações aprovadas ou parcialmente aprovadas podem receber vínculo retroativo.'
-    )
-  }
-
-  const movement = await repository.findMovementForRetroactiveLink(pool, movementId)
+function assertMovementEligibleForRetroactiveLink(movement) {
   if (!movement) throw new Error('Movimentação não encontrada.')
   if (movement.request_id) {
     throw new Error('Esta movimentação já está vinculada a uma solicitação.')
   }
   if (movement.delivery_status !== 'confirmed') {
-    throw new Error('Somente movimentações com entrega confirmada podem ser vinculadas retroativamente.')
+    throw new Error(
+      'Somente movimentações com entrega confirmada podem ser vinculadas retroativamente.'
+    )
   }
+  if (!LINKABLE_MOVEMENT_TYPES.includes(movement.movement_type)) {
+    throw new Error(
+      `Tipo de movimentação "${movement.movement_type}" não é elegível para vínculo retroativo com solicitação de TI.`
+    )
+  }
+}
+
+function buildRetroactiveLinkNotes(movementId, match, userNotes) {
+  const mismatchNote = match.matches
+    ? 'Correspondência total entre solicitante, unidade e equipamento.'
+    : `Divergências confirmadas pelo usuário: ${match.mismatches.join(', ')}.`
+
+  const parts = [
+    `Vínculo retroativo com movimentação #${movementId}.`,
+    mismatchNote,
+  ]
+  const trimmed = userNotes?.trim()
+  if (trimmed) parts.push(`Observação: ${trimmed}`)
+  return parts.join(' ')
+}
+
+async function searchLinkableMovements(pool, requestId, search) {
+  const request = await repository.findById(pool, requestId)
+  assertRequestEligibleForRetroactiveLink(request)
+
+  const existingCount = await repository.countMovementsByRequestId(pool, requestId)
+  if (existingCount > 0) {
+    throw new Error('Esta solicitação já possui movimentação vinculada.')
+  }
+
+  return repository.findConfirmedUnlinkedMovements(pool, {
+    search,
+    limit: 20,
+    affinityPersonId: request.requester_person_id,
+    affinityUnitId: request.unit_id,
+    allowedTypes: LINKABLE_MOVEMENT_TYPES,
+  })
+}
+
+async function checkRetroactiveLink(pool, requestId, movementId) {
+  const request = await repository.findById(pool, requestId)
+  assertRequestEligibleForRetroactiveLink(request)
+
+  const existingCount = await repository.countMovementsByRequestId(pool, requestId)
+  if (existingCount > 0) {
+    throw new Error('Esta solicitação já possui movimentação vinculada.')
+  }
+
+  const movement = await repository.findMovementForRetroactiveLink(pool, movementId)
+  assertMovementEligibleForRetroactiveLink(movement)
 
   const items = await repository.findCatalogItemsByRequestId(pool, requestId)
   const match = buildRetroactiveMatchAnalysis(request, items, movement)
@@ -974,24 +1052,27 @@ async function linkMovementRetroactively(pool, requestId, movementId, currentUse
     throw err
   }
 
-  const linked = await repository.setMovementRequestId(pool, movementId, requestId)
-  if (!linked) {
-    throw new Error('Não foi possível vincular: a movimentação já possui solicitação ou não foi encontrada.')
+  const notes = buildRetroactiveLinkNotes(movementId, match, options.notes)
+
+  await repository.linkMovementAndConcludeRequest(pool, {
+    requestId,
+    movementId,
+    userId: currentUser.id,
+    notes,
+    allowedStatuses: APPROVED_LIKE_STATUSES,
+    allowedMovementTypes: LINKABLE_MOVEMENT_TYPES,
+  })
+
+  const request = await getRequestById(pool, requestId, currentUser)
+  return {
+    request,
+    linkMeta: {
+      matches: match.matches,
+      mismatches: match.mismatches,
+      confirm_mismatches: confirmMismatches,
+      notes,
+    },
   }
-
-  const mismatchNote = match.matches
-    ? 'Correspondência total entre solicitante, unidade e equipamento.'
-    : `Divergências confirmadas pelo usuário: ${match.mismatches.join(', ')}.`
-
-  const notes =
-    options.notes?.trim() ||
-    `Vínculo retroativo com movimentação #${movementId}. ${mismatchNote}`
-
-  await repository.updateRequestStatus(
-    pool, requestId, 'confirmed', currentUser.id, notes
-  )
-
-  return getRequestById(pool, requestId, currentUser)
 }
 
 module.exports = {

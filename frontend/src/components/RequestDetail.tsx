@@ -396,7 +396,9 @@ const RequestDetail = ({
 			setLinkResults(results);
 			if (results.length === 0) {
 				addToast(
-					'Nenhuma movimentação concluída sem vínculo encontrada.',
+					linkSearch.trim()
+						? 'Nenhuma movimentação elegível encontrada para o termo informado.'
+						: 'Nenhuma sugestão por afinidade. Informe ID, solicitante, unidade ou patrimônio.',
 					'info',
 				);
 			}
@@ -2251,7 +2253,9 @@ const RequestDetail = ({
 									{canLinkMovement &&
 										APPROVED_LIKE_STATUSES.has(
 											request.status,
-										) && (
+										) &&
+										(!request.movements ||
+											request.movements.length === 0) && (
 											<div className="flex justify-end">
 												<button
 													type="button"
@@ -2492,8 +2496,9 @@ const RequestDetail = ({
 									Vincular movimentação concluída
 								</h3>
 								<p className="text-xs text-gray-500 mt-0.5">
-									Busque uma movimentação com entrega confirmada e sem
-									solicitação vinculada.
+									Busque por ID, solicitante, unidade ou patrimônio.
+									Sem termo, listamos apenas empréstimos/saídas com
+									afinidade de solicitante ou unidade.
 								</p>
 							</div>
 							<button
@@ -2704,6 +2709,51 @@ const RequestDetail = ({
 														.join(', ')
 												: '—'}
 										</p>
+										{(linkMatch.equipamento.missing_in_movement
+											?.length ?? 0) > 0 && (
+											<p className="text-amber-800">
+												Ausentes na movimentação:{' '}
+												{(
+													linkMatch.equipamento
+														.missing_in_movement || []
+												)
+													.map(
+														(t) =>
+															`${t.item_type_name || 'Tipo'} (qtd ${t.quantity})`,
+													)
+													.join(', ')}
+											</p>
+										)}
+										{(linkMatch.equipamento.quantity_shortfalls
+											?.length ?? 0) > 0 && (
+											<p className="text-amber-800">
+												Quantidade insuficiente:{' '}
+												{(
+													linkMatch.equipamento
+														.quantity_shortfalls || []
+												)
+													.map(
+														(t) =>
+															`${t.item_type_name || 'Tipo'} (solicitado ${t.requested}, encontrado ${t.found})`,
+													)
+													.join(', ')}
+											</p>
+										)}
+										{(linkMatch.equipamento.extra_in_movement
+											?.length ?? 0) > 0 && (
+											<p className="text-amber-800">
+												Extras na movimentação:{' '}
+												{(
+													linkMatch.equipamento
+														.extra_in_movement || []
+												)
+													.map(
+														(t) =>
+															`${t.item_type_name || 'Tipo'} (qtd ${t.quantity})`,
+													)
+													.join(', ')}
+											</p>
+										)}
 									</div>
 
 									{!linkMatch.matches && (

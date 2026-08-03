@@ -112,6 +112,14 @@ export interface LinkEquipmentMatch {
   request_types: Array<{ item_type_id: number; item_type_name?: string; quantity: number }>
   movement_types: Array<{ item_type_id: number; item_type_name?: string; quantity: number }>
   missing_in_movement: Array<{ item_type_id: number; item_type_name?: string; quantity: number }>
+  quantity_shortfalls?: Array<{
+    item_type_id: number
+    item_type_name?: string
+    requested: number
+    found: number
+    quantity: number
+  }>
+  extra_in_movement?: Array<{ item_type_id: number; item_type_name?: string; quantity: number }>
 }
 
 export interface LinkMatchAnalysis {
