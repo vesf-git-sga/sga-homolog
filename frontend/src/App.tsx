@@ -58,6 +58,7 @@ import {
 	TrendingUp,
 	Download,
 	Filter, // Adicionado Users e Search para pessoas e busca
+	MessageCircle,
 } from 'lucide-react';
 import {
 	ResponsiveContainer,
@@ -103,6 +104,8 @@ import CdInventoryPage from './components/CdInventoryPage';
 import PendingTermsList from './components/PendingTermsList';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
 import RequestsPage from './components/RequestsPage';
+import FeedbackFab from './components/FeedbackFab';
+import FeedbackManagementPage from './components/FeedbackManagementPage';
 import { requestsApi, MovementPrefill } from './services/requestsApi';
 
 // --- LISTAS PADRÃO PARA COMBOS (DROPDOWNS) ---
@@ -1274,6 +1277,7 @@ const DashboardPage = () => {
 
 		MENU_AUDITORIA: [ROLES.ADMIN],
 		MENU_CONFIGURACOES: [ROLES.ADMIN, ROLES.MANAGER],
+		MENU_FEEDBACKS: [ROLES.ADMIN, ROLES.MANAGER],
 
 		// Ações
 		// Ambos (Basic e Operator) podem registrar movimentações gerais
@@ -1698,6 +1702,12 @@ const DashboardPage = () => {
 			icon: History,
 			id: 'audit',
 			roles: PERMISSIONS.MENU_AUDITORIA,
+		},
+		{
+			name: 'Gestão de Feedbacks',
+			icon: MessageCircle,
+			id: 'feedback-management',
+			roles: PERMISSIONS.MENU_FEEDBACKS,
 		},
 		{
 			name: 'Configurações',
@@ -4010,6 +4020,14 @@ const DashboardPage = () => {
 							addToast={addToast}
 						/>
 					)}
+
+					{activeMenu === 'feedback-management' &&
+						canAccess(PERMISSIONS.MENU_FEEDBACKS) && (
+							<FeedbackManagementPage
+								currentUserId={user?.id || 0}
+								addToast={addToast}
+							/>
+						)}
 				</main>
 			</div>
 
@@ -4509,6 +4527,14 @@ const DashboardPage = () => {
 						// Se quiser atualizar a lista de pendências imediatamente, pode passar um trigger específico
 					}}
 					API_URL={API_URL}
+				/>
+			)}
+
+			{user?.id && (
+				<FeedbackFab
+					activeMenu={activeMenu}
+					currentUserId={user.id}
+					addToast={addToast}
 				/>
 			)}
 		</div>
