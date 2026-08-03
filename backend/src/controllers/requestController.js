@@ -304,7 +304,9 @@ async function searchLinkableMovements(req, res, pool) {
   } catch (err) {
     const status =
       err.message.includes('não encontrada') ? 404 :
-      err.message.includes('aprovadas') ? 400 : 500
+      err.message.includes('aprovadas') ||
+      err.message.includes('já possui movimentação')
+        ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }
@@ -322,7 +324,9 @@ async function checkRetroactiveLink(req, res, pool) {
     const status =
       err.message.includes('não encontrada') ? 404 :
       err.message.includes('aprovadas') || err.message.includes('vinculada') ||
-      err.message.includes('confirmada') ? 400 : 500
+      err.message.includes('confirmada') || err.message.includes('já possui') ||
+      err.message.includes('não é elegível')
+        ? 400 : 500
     res.status(status).json({ message: err.message })
   }
 }
@@ -336,7 +340,7 @@ async function linkMovementRetroactively(req, res, pool, logAudit) {
       return res.status(400).json({ message: 'movement_id é obrigatório.' })
     }
 
-    const result = await service.linkMovementRetroactively(
+    const { request, linkMeta } = await service.linkMovementRetroactively(
       pool, requestId, movementId, req.user,
       { confirm_mismatches, notes }
     )
@@ -348,13 +352,15 @@ async function linkMovementRetroactively(req, res, pool, logAudit) {
       requestId,
       {
         movement_id: movementId,
-        confirm_mismatches: Boolean(confirm_mismatches),
-        notes: notes || null,
+        confirm_mismatches: Boolean(linkMeta?.confirm_mismatches),
+        matches: Boolean(linkMeta?.matches),
+        mismatches: linkMeta?.mismatches || [],
+        notes: linkMeta?.notes || notes || null,
       },
       req.ip
     )
 
-    res.status(200).json(result)
+    res.status(200).json(request)
   } catch (err) {
     if (err.code === 'MATCH_CONFIRMATION_REQUIRED') {
       return res.status(409).json({
@@ -368,7 +374,9 @@ async function linkMovementRetroactively(req, res, pool, logAudit) {
       err.message.includes('não encontrada') ? 404 :
       err.message.includes('permissão') || err.message.includes('aprovadas') ||
       err.message.includes('vinculada') || err.message.includes('confirmada') ||
-      err.message.includes('obrigatório') || err.message.includes('Não foi possível')
+      err.message.includes('obrigatório') || err.message.includes('Não foi possível') ||
+      err.message.includes('já possui') || err.message.includes('não é elegível') ||
+      err.message.includes('não está mais aprovada')
         ? 400 : 500
     res.status(status).json({ message: err.message })
   }

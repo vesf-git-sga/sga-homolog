@@ -724,15 +724,27 @@ async function findUnavailableQueue(pool) {
 
 // ─── Vínculo retroativo solicitação ↔ movimentação ───────────────────────────
 
-async function findConfirmedUnlinkedMovements(pool, { search, limit = 20 } = {}) {
+const LINKABLE_MOVEMENT_TYPES = ['loan', 'exit']
+
+async function findConfirmedUnlinkedMovements(pool, {
+  search,
+  limit = 20,
+  affinityPersonId = null,
+  affinityUnitId = null,
+  allowedTypes = LINKABLE_MOVEMENT_TYPES,
+} = {}) {
   const params = []
   const clauses = [
     `am.request_id IS NULL`,
     `am.delivery_status = 'confirmed'`,
   ]
 
-  if (search && String(search).trim()) {
-    const q = String(search).trim()
+  params.push(allowedTypes)
+  clauses.push(`am.movement_type = ANY($${params.length}::text[])`)
+
+  const searchTrim = search && String(search).trim()
+  if (searchTrim) {
+    const q = searchTrim
     if (/^\d+$/.test(q)) {
       params.push(parseInt(q, 10))
       clauses.push(`am.id = $${params.length}`)
@@ -750,6 +762,25 @@ async function findConfirmedUnlinkedMovements(pool, { search, limit = 20 } = {})
         )
       )`)
     }
+  } else {
+    // Sem termo: só sugestões com afinidade de solicitante ou unidade (evita dump global).
+    const affinityParts = []
+    if (affinityPersonId != null) {
+      params.push(Number(affinityPersonId))
+      affinityParts.push(`am.recipient_person_id = $${params.length}`)
+    }
+    if (affinityUnitId != null) {
+      params.push(Number(affinityUnitId))
+      affinityParts.push(`am.destination_unit_id = $${params.length}`)
+    }
+    if (affinityParts.length === 0) return []
+    clauses.push(`(${affinityParts.join(' OR ')})`)
+  }
+
+  let orderBy = 'am.movement_date DESC NULLS LAST, am.id DESC'
+  if (!searchTrim && affinityPersonId != null) {
+    params.push(Number(affinityPersonId))
+    orderBy = `CASE WHEN am.recipient_person_id = $${params.length} THEN 0 ELSE 1 END, ${orderBy}`
   }
 
   params.push(Math.min(parseInt(limit, 10) || 20, 50))
@@ -768,7 +799,7 @@ async function findConfirmedUnlinkedMovements(pool, { search, limit = 20 } = {})
      LEFT JOIN units un ON un.id = am.destination_unit_id
      LEFT JOIN users u ON u.id = am.responsible_user_id
      WHERE ${clauses.join(' AND ')}
-     ORDER BY am.movement_date DESC, am.id DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length}`,
     params
   )
@@ -807,15 +838,103 @@ async function findMovementForRetroactiveLink(pool, movementId) {
   return movement
 }
 
-async function setMovementRequestId(pool, movementId, requestId) {
+async function countMovementsByRequestId(pool, requestId) {
   const result = await pool.query(
-    `UPDATE asset_movements
-     SET request_id = $1
-     WHERE id = $2 AND request_id IS NULL
-     RETURNING id, request_id, delivery_status`,
-    [requestId, movementId]
+    `SELECT COUNT(*)::int AS count FROM asset_movements WHERE request_id = $1`,
+    [requestId]
   )
-  return result.rows[0] || null
+  return result.rows[0]?.count || 0
+}
+
+/**
+ * Vincula movimentação e conclui a solicitação na mesma transação,
+ * com FOR UPDATE para impedir corrida (ex.: cancelamento paralelo).
+ */
+async function linkMovementAndConcludeRequest(pool, {
+  requestId,
+  movementId,
+  userId,
+  notes,
+  allowedStatuses,
+  allowedMovementTypes = LINKABLE_MOVEMENT_TYPES,
+}) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const reqRes = await client.query(
+      'SELECT id, status FROM requests WHERE id = $1 FOR UPDATE',
+      [requestId]
+    )
+    if (!reqRes.rows.length) throw new Error('Solicitação não encontrada.')
+    const lockedRequest = reqRes.rows[0]
+    if (!allowedStatuses.includes(lockedRequest.status)) {
+      throw new Error(
+        `Não foi possível vincular: a solicitação não está mais aprovada (status atual: ${lockedRequest.status}).`
+      )
+    }
+
+    const existingMov = await client.query(
+      'SELECT id FROM asset_movements WHERE request_id = $1 LIMIT 1',
+      [requestId]
+    )
+    if (existingMov.rows.length) {
+      throw new Error('Esta solicitação já possui movimentação vinculada.')
+    }
+
+    const movRes = await client.query(
+      `SELECT id, request_id, delivery_status, movement_type
+       FROM asset_movements WHERE id = $1 FOR UPDATE`,
+      [movementId]
+    )
+    if (!movRes.rows.length) throw new Error('Movimentação não encontrada.')
+    const lockedMovement = movRes.rows[0]
+
+    if (lockedMovement.request_id) {
+      throw new Error('Esta movimentação já está vinculada a uma solicitação.')
+    }
+    if (lockedMovement.delivery_status !== 'confirmed') {
+      throw new Error(
+        'Somente movimentações com entrega confirmada podem ser vinculadas retroativamente.'
+      )
+    }
+    if (!allowedMovementTypes.includes(lockedMovement.movement_type)) {
+      throw new Error(
+        `Tipo de movimentação "${lockedMovement.movement_type}" não é elegível para vínculo retroativo com solicitação de TI.`
+      )
+    }
+
+    const linked = await client.query(
+      `UPDATE asset_movements
+       SET request_id = $1
+       WHERE id = $2 AND request_id IS NULL
+       RETURNING id, request_id, delivery_status`,
+      [requestId, movementId]
+    )
+    if (!linked.rows.length) {
+      throw new Error(
+        'Não foi possível vincular: a movimentação já possui solicitação ou não foi encontrada.'
+      )
+    }
+
+    await client.query(
+      `UPDATE requests SET status = 'concluido', updated_at = NOW() WHERE id = $1`,
+      [requestId]
+    )
+    await client.query(
+      `INSERT INTO request_status_history (request_id, old_status, new_status, notes, changed_by)
+       VALUES ($1, $2, 'concluido', $3, $4)`,
+      [requestId, lockedRequest.status, notes || null, userId]
+    )
+
+    await client.query('COMMIT')
+    return linked.rows[0]
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
 }
 
 module.exports = {
@@ -848,5 +967,7 @@ module.exports = {
   findUnavailableQueue,
   findConfirmedUnlinkedMovements,
   findMovementForRetroactiveLink,
-  setMovementRequestId,
+  countMovementsByRequestId,
+  linkMovementAndConcludeRequest,
+  LINKABLE_MOVEMENT_TYPES,
 }
