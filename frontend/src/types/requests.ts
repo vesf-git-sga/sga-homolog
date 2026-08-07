@@ -100,7 +100,7 @@ export interface TechnicalVisit {
   assigned_to_name?: string | null
   scheduled_date?: string | null
   scheduled_time?: string | null
-  result?: 'constatada' | 'nao_constatada' | 'frustrada' | null
+  result?: 'constatada' | 'nao_constatada' | 'frustrada' | 'cancelada' | null
   findings?: string | null
   completed_by?: number | null
   completed_by_name?: string | null

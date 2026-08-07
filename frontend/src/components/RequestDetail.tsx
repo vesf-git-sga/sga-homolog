@@ -390,7 +390,7 @@ const RequestDetail = ({
 				request.previous_status,
 			);
 			addToast(
-				`Status revertido para "${REQUEST_STATUS_LABELS[updated.status] || updated.status}".`,
+				`Alteração desfeita. Novo status: "${REQUEST_STATUS_LABELS[updated.status] || updated.status}".`,
 				'success',
 			);
 			setConfirmingRevert(false);
@@ -1219,7 +1219,8 @@ const RequestDetail = ({
 															.filter(
 																(visit) =>
 																	visit.completed_at &&
-																	visit.result !== 'frustrada',
+																	visit.result !== 'frustrada' &&
+																	visit.result !== 'cancelada',
 															)
 															.sort(
 																(a, b) =>
@@ -1229,6 +1230,7 @@ const RequestDetail = ({
 														const canEditVisitResult =
 															!!v.completed_at &&
 															v.result !== 'frustrada' &&
+															v.result !== 'cancelada' &&
 															v.id === latestEditableVisitId &&
 															DELIBERATION_STATUSES.has(
 																request.status,
@@ -1430,7 +1432,11 @@ const RequestDetail = ({
 																			<div className="space-y-1">
 																				<div className="flex items-center gap-2 flex-wrap">
 																					{v.completed_at ?
-																						v.result === 'frustrada' ?
+																						v.result === 'cancelada' ?
+																							<span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full font-medium">
+																								Visita Cancelada
+																							</span>
+																						: v.result === 'frustrada' ?
 																							<span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-800 rounded-full font-medium">
 																								Visita Frustrada
 																							</span>
@@ -1675,6 +1681,17 @@ const RequestDetail = ({
 																				</button>
 																			</div>
 																		)
+																	) : v.result === 'cancelada' ? (
+																		<div className="space-y-2">
+																			<p className="text-xs text-gray-700 font-medium">
+																				Visita técnica cancelada.
+																			</p>
+																			{v.findings && (
+																				<p className="text-xs text-gray-600">
+																					<span className="font-medium">Motivo:</span> {v.findings}
+																				</p>
+																			)}
+																		</div>
 																	) : v.result === 'frustrada' ? (
 																		<div className="space-y-2">
 																			<p className="text-xs text-orange-800 font-medium">
@@ -2409,10 +2426,19 @@ const RequestDetail = ({
 										<div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2.5">
 											<p className="text-sm font-semibold text-amber-900 flex items-center gap-2">
 												<RotateCcw size={15} className="shrink-0" />
-												Confirmar retorno ao status anterior (
-												{REQUEST_STATUS_LABELS[request.previous_status] ||
-													request.previous_status}
-												)?
+												Desfazer última alteração?
+											</p>
+											<p className="text-sm text-amber-900">
+												Status:{' '}
+												<span className="font-medium">
+													{REQUEST_STATUS_LABELS[request.status] ||
+														request.status}
+												</span>
+												{' → '}
+												<span className="font-medium">
+													{REQUEST_STATUS_LABELS[request.previous_status] ||
+														request.previous_status}
+												</span>
 											</p>
 											<p className="text-xs text-amber-800 leading-relaxed">
 												{request.status === 'visita_tecnica_solicitada' &&
@@ -2450,7 +2476,7 @@ const RequestDetail = ({
 													disabled={isActing || !revertNotes.trim()}
 													className="flex-1 py-2 text-sm rounded-lg font-medium disabled:opacity-60 bg-amber-600 hover:bg-amber-700 text-white"
 												>
-													{isActing ? 'Aguarde…' : 'Sim, reverter'}
+													{isActing ? 'Aguarde…' : 'Sim, desfazer'}
 												</button>
 											</div>
 										</div>
@@ -2563,10 +2589,7 @@ const RequestDetail = ({
 													className="px-4 py-2 text-sm rounded-lg font-medium transition-colors border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
 												>
 													<RotateCcw size={14} className="inline mr-1.5" />
-													Voltar ao status anterior (
-													{REQUEST_STATUS_LABELS[request.previous_status] ||
-														request.previous_status}
-													)
+													Desfazer última alteração
 												</button>
 											)}
 											{APPROVED_LIKE_STATUSES.has(request.status) && !request.dit_ciente_at &&

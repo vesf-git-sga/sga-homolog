@@ -337,7 +337,7 @@ async function getRequestById(pool, id, currentUser) {
 
   const visitsWithResults = await Promise.all(
     visits.map(async (visit) => {
-      if (!visit.completed_at || visit.result === 'frustrada') return visit
+      if (!visit.completed_at || visit.result === 'frustrada' || visit.result === 'cancelada') return visit
       const item_results = await repository.findVisitItemResults(pool, visit.id)
       return { ...visit, item_results }
     })
@@ -441,13 +441,13 @@ async function revertStatus(pool, requestId, currentUser, notes, expectedPreviou
       if (fromStatus === 'visita_tecnica_solicitada' && previousStatus === 'requisitado') {
         await client.query(
           `UPDATE technical_visits
-           SET result = 'frustrada',
+           SET result = 'cancelada',
                findings = $1,
                completed_by = $2,
                completed_at = NOW()
            WHERE request_id = $3 AND completed_at IS NULL`,
           [
-            `Cancelada automaticamente ao reverter status. Motivo: ${String(notes).trim()}`,
+            `Visita cancelada automaticamente ao desfazer alteração de status. Motivo: ${String(notes).trim()}`,
             currentUser.id,
             requestId,
           ]
@@ -573,14 +573,14 @@ async function updateVisitResult(pool, visitId, itemResults, findings, currentUs
   )
   if (visitRes.rows.length === 0) throw new Error('Visita técnica não encontrada.')
   if (!visitRes.rows[0].completed_at) throw new Error('A visita ainda não foi concluída.')
-  if (visitRes.rows[0].result === 'frustrada') {
-    throw new Error('Visitas frustradas não permitem correção de resultado por equipamento.')
+  if (visitRes.rows[0].result === 'frustrada' || visitRes.rows[0].result === 'cancelada') {
+    throw new Error('Visitas frustradas ou canceladas não permitem correção de resultado por equipamento.')
   }
 
   const requestId = visitRes.rows[0].request_id
   const latestVisitRes = await pool.query(
     `SELECT id FROM technical_visits
-     WHERE request_id = $1 AND completed_at IS NOT NULL AND result IS DISTINCT FROM 'frustrada'
+     WHERE request_id = $1 AND completed_at IS NOT NULL AND result IS DISTINCT FROM 'frustrada' AND result IS DISTINCT FROM 'cancelada'
      ORDER BY completed_at DESC, id DESC
      LIMIT 1`,
     [requestId]
