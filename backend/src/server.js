@@ -12909,6 +12909,10 @@ app.post('/api/catalog/models', authenticateToken, async (req, res) => {
 const requestsRouter = require('./routes/requests');
 app.use('/api', requestsRouter(pool, authenticateToken, authorizePermission, logAudit));
 
+// ─── Módulo de Feedback ──────────────────────────────────────────────────────
+const feedbacksRouter = require('./routes/feedbacks');
+app.use('/api', feedbacksRouter(pool, authenticateToken, authorizeRole, logAudit));
+
 // Inicia o servidor
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
