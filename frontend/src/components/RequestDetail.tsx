@@ -2575,8 +2575,7 @@ const RequestDetail = ({
 													</div>
 												</div>
 										)}
-									<div className="flex flex-wrap items-center justify-between gap-3">
-										<div className="flex flex-wrap items-center gap-2">
+									<div className="flex flex-wrap items-center gap-2">
 											{auxiliaryTransitions.map(renderTransitionButton)}
 											{canRevert && request.previous_status && (
 												<button
@@ -2604,11 +2603,8 @@ const RequestDetail = ({
 														Marcar DIT Ciente
 													</button>
 												)}
-										</div>
-										<div className="flex flex-wrap items-center gap-2 ml-auto">
 											{decisionTransitions.map(renderTransitionButton)}
 										</div>
-									</div>
 									</div>
 									}
 								</div>
