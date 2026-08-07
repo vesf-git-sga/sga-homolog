@@ -43,10 +43,11 @@ const EDUCAGESTOR_PROTOCOL_RE = /^\d{9}$/
 //
 //   Cancelamento: qualquer estado não-terminal → cancelado (manager/admin)
 //
-//   Reversões (REVERSE_TRANSITIONS): correção operacional com motivo obrigatório
-//     visita_tecnica_solicitada → requisitado (cancela visita pendente)
-//     em_execucao → aprovado/parcialmente_aprovado (desvincula movimentação)
-//     concluido → em_execucao (desvincula movimentação)
+//   Reversões (REVERTIBLE_STATUSES + histórico):
+//     botão universal "voltar ao status anterior"; destino = última transição
+//     real no histórico (entradas de reversão são ignoradas na resolução).
+//     Side effects: cancela visita pendente; desvincula movimentação;
+//     limpa deliberação ao sair de aprovado/reprovado/parcial.
 //
 // TRANSITIONS[fromStatus][toStatus] = [roles que podem executar]
 
@@ -94,24 +95,29 @@ const TRANSITIONS = {
 }
 
 // ─── Reversões de status (voltar ao status anterior) ───────────────────────
-// Separado de TRANSITIONS para não misturar avanço e correção operacional.
-// REVERSE_TRANSITIONS[fromStatus][toStatus] = [roles que podem executar]
+// REVERTIBLE_STATUSES: quem pode reverter em cada status.
+// O destino vem do histórico (última transição real, ignorando reversões).
 const REVERSE_ROLES = ['basic', 'operator', 'manager', 'admin']
 
-const REVERSE_TRANSITIONS = {
-  visita_tecnica_solicitada: {
-    requisitado: REVERSE_ROLES,
-  },
-  // Frontend envia "aprovado"; o service restaura aprovado/parcialmente_aprovado.
-  em_execucao: {
-    aprovado: REVERSE_ROLES,
-  },
-  concluido: {
-    em_execucao: REVERSE_ROLES,
-  },
+const REVERTIBLE_STATUSES = {
+  visita_tecnica_solicitada:           REVERSE_ROLES,
+  visita_realizada:                    REVERSE_ROLES,
+  aguardando_aprovacao:                REVERSE_ROLES,
+  necessidade_parcialmente_constatada: REVERSE_ROLES,
+  aprovado:                            REVERSE_ROLES,
+  parcialmente_aprovado:               REVERSE_ROLES,
+  reprovado:                           REVERSE_ROLES,
+  indisponivel_estoque:                REVERSE_ROLES,
+  em_execucao:                         REVERSE_ROLES,
+  concluido:                           REVERSE_ROLES,
 }
 
 const MOVEMENT_UNLINK_FROM_STATUSES = new Set(['em_execucao', 'concluido'])
+const CLEAR_DELIBERATION_FROM_STATUSES = new Set([
+  'aprovado',
+  'parcialmente_aprovado',
+  'reprovado',
+])
 
 // Statuses que encerram o ciclo de vida da solicitação
 const TERMINAL_STATUSES = ['concluido', 'reprovado', 'cancelado']
@@ -210,11 +216,29 @@ function getAllowedTransitions(request, role) {
     .map(([toStatus]) => toStatus)
 }
 
-function getAllowedReverseTransitions(request, role) {
-  const fromMap = REVERSE_TRANSITIONS[request.status] || {}
-  return Object.entries(fromMap)
-    .filter(([, roles]) => roles.includes(role))
-    .map(([toStatus]) => toStatus)
+/** Última transição real que chegou ao status atual (ignora reversões e no-ops). */
+function resolvePreviousStatus(history, currentStatus) {
+  if (!Array.isArray(history) || history.length === 0) return null
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i]
+    if (!entry.old_status || entry.old_status === entry.new_status) continue
+    if (entry.new_status !== currentStatus) continue
+    if (String(entry.notes || '').startsWith('Reversão de status')) continue
+    return entry.old_status
+  }
+  return null
+}
+
+function getRevertInfo(request, history, role) {
+  const roles = REVERTIBLE_STATUSES[request.status]
+  if (!roles || !roles.includes(role)) {
+    return { can_revert: false, previous_status: null }
+  }
+  const previous_status = resolvePreviousStatus(history, request.status)
+  if (!previous_status) {
+    return { can_revert: false, previous_status: null }
+  }
+  return { can_revert: true, previous_status }
 }
 
 // ─── Criação ───────────────────────────────────────────────────────────────
@@ -322,9 +346,9 @@ async function getRequestById(pool, id, currentUser) {
   const allowed_transitions = currentUser
     ? getAllowedTransitions(request, currentUser.role)
     : []
-  const allowed_reverse_transitions = currentUser
-    ? getAllowedReverseTransitions(request, currentUser.role)
-    : []
+  const revertInfo = currentUser
+    ? getRevertInfo(request, history, currentUser.role)
+    : { can_revert: false, previous_status: null }
 
   return {
     ...request,
@@ -333,7 +357,8 @@ async function getRequestById(pool, id, currentUser) {
     movements,
     items,
     allowed_transitions,
-    allowed_reverse_transitions,
+    can_revert: revertInfo.can_revert,
+    previous_status: revertInfo.previous_status,
   }
 }
 
@@ -376,7 +401,7 @@ async function changeStatus(pool, requestId, newStatus, currentUser, notes) {
 
 // ─── Reversão de status ────────────────────────────────────────────────────
 
-async function revertStatus(pool, requestId, targetStatus, currentUser, notes) {
+async function revertStatus(pool, requestId, currentUser, notes, expectedPreviousStatus) {
   const request = await repository.findById(pool, requestId)
   if (!request) throw new Error('Solicitação não encontrada.')
 
@@ -384,46 +409,36 @@ async function revertStatus(pool, requestId, targetStatus, currentUser, notes) {
     throw new Error('O motivo da alteração de status é obrigatório.')
   }
 
-  const fromStatus = request.status
-  let resolvedTarget = targetStatus
-
-  // Ao sair de em_execucao, restaura aprovado/parcialmente_aprovado conforme deliberação.
-  if (fromStatus === 'em_execucao' && APPROVED_LIKE_STATUSES.includes(targetStatus)) {
-    const deliberations = await repository.findItemDeliberations(pool, requestId)
-    if (deliberations.length > 0) {
-      resolvedTarget = aggregateDeliberationStatus(deliberations)
-      if (resolvedTarget === 'reprovado') {
-        throw new Error('Não é possível reverter para deliberação integralmente reprovada.')
-      }
-    } else {
-      resolvedTarget = 'aprovado'
-    }
+  const roles = REVERTIBLE_STATUSES[request.status]
+  if (!roles) {
+    throw new Error(`Reversão a partir de '${request.status}' não é permitida.`)
   }
-
-  const allowedRoles = REVERSE_TRANSITIONS[fromStatus]?.[targetStatus]
-    || (fromStatus === 'em_execucao' && APPROVED_LIKE_STATUSES.includes(targetStatus)
-      ? REVERSE_TRANSITIONS.em_execucao.aprovado
-      : null)
-
-  if (!allowedRoles) {
-    throw new Error(
-      `Reversão de '${fromStatus}' para '${resolvedTarget}' não é permitida.`
-    )
-  }
-  if (!allowedRoles.includes(currentUser.role)) {
+  if (!roles.includes(currentUser.role)) {
     throw new Error(`Seu perfil (${currentUser.role}) não tem permissão para esta reversão.`)
   }
 
+  const history = await repository.findStatusHistory(pool, requestId)
+  const previousStatus = resolvePreviousStatus(history, request.status)
+  if (!previousStatus) {
+    throw new Error('Não há status anterior disponível para reverter.')
+  }
+  if (expectedPreviousStatus && expectedPreviousStatus !== previousStatus) {
+    throw new Error(
+      `Status anterior mudou enquanto você agia (esperado: ${expectedPreviousStatus}, atual: ${previousStatus}).`
+    )
+  }
+
+  const fromStatus = request.status
   const historyNotes = `Reversão de status. Motivo: ${String(notes).trim()}`
 
   return repository.transitionStatus(
     pool,
     requestId,
-    resolvedTarget,
+    previousStatus,
     currentUser.id,
     historyNotes,
     async (client) => {
-      if (fromStatus === 'visita_tecnica_solicitada' && resolvedTarget === 'requisitado') {
+      if (fromStatus === 'visita_tecnica_solicitada' && previousStatus === 'requisitado') {
         await client.query(
           `UPDATE technical_visits
            SET result = 'frustrada',
@@ -440,11 +455,23 @@ async function revertStatus(pool, requestId, targetStatus, currentUser, notes) {
       }
 
       if (MOVEMENT_UNLINK_FROM_STATUSES.has(fromStatus)) {
-        // Desvincula a solicitação; mantém estoque/ativos e demais dados da movimentação.
         await client.query(
           `UPDATE asset_movements
            SET request_id = NULL
            WHERE request_id = $1`,
+          [requestId]
+        )
+      }
+
+      if (CLEAR_DELIBERATION_FROM_STATUSES.has(fromStatus)) {
+        await client.query(
+          `DELETE FROM request_item_deliberations WHERE request_id = $1`,
+          [requestId]
+        )
+        await client.query(
+          `UPDATE requests
+           SET approved_by = NULL, approved_at = NULL
+           WHERE id = $1`,
           [requestId]
         )
       }
@@ -1213,7 +1240,7 @@ module.exports = {
   findApprovedRequest,
   getMovementPrefill,
   getAllowedTransitions,
-  getAllowedReverseTransitions,
+  getRevertInfo,
   ditCiente,
   registrarEventoDit,
   getUnavailableQueue,

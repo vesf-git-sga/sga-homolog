@@ -182,8 +182,11 @@ export const requestsApi = {
   changeStatus: (id: number, status: RequestStatus, notes?: string) =>
     axios.patch<EquipmentRequest>(`${API_URL}/requests/${id}/status`, { status, notes }).then(r => r.data),
 
-  revertStatus: (id: number, status: RequestStatus, notes: string) =>
-    axios.patch<EquipmentRequest>(`${API_URL}/requests/${id}/revert-status`, { status, notes }).then(r => r.data),
+  revertStatus: (id: number, notes: string, previousStatus?: RequestStatus) =>
+    axios.patch<EquipmentRequest>(`${API_URL}/requests/${id}/revert-status`, {
+      notes,
+      previous_status: previousStatus,
+    }).then(r => r.data),
 
   submitItemDeliberations: (id: number, decisions: ItemDeliberationPayload[], notes?: string) =>
     axios.post<EquipmentRequest>(`${API_URL}/requests/${id}/item-deliberations`, { decisions, notes }).then(r => r.data),

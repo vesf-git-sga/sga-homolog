@@ -119,12 +119,6 @@ const TRANSITION_LABELS_FROM_UNAVAILABLE: Record<string, string> = {
 	aprovado: 'Equipamento Disponível',
 };
 
-const REVERSE_TRANSITION_LABELS: Record<string, string> = {
-	requisitado: 'Voltar para Requisitado',
-	aprovado: 'Voltar para Aprovado (desvincular movimentação)',
-	em_execucao: 'Voltar para Em Execução (desvincular movimentação)',
-};
-
 const DESTRUCTIVE_TRANSITIONS = new Set(['cancelado', 'reprovado']);
 
 /** Ações auxiliares ficam à esquerda no rodapé; as demais (decisão) à direita. */
@@ -257,8 +251,7 @@ const RequestDetail = ({
 	// Ações inline
 	const [confirmingTransition, setConfirmingTransition] =
 		useState<RequestStatus | null>(null);
-	const [confirmingRevert, setConfirmingRevert] =
-		useState<RequestStatus | null>(null);
+	const [confirmingRevert, setConfirmingRevert] = useState(false);
 	const [transitionNotes, setTransitionNotes] = useState('');
 	const [revertNotes, setRevertNotes] = useState('');
 	const [isActing, setIsActing] = useState(false);
@@ -382,8 +375,8 @@ const RequestDetail = ({
 		}
 	};
 
-	const handleRevert = async (toStatus: RequestStatus) => {
-		if (!request) return;
+	const handleRevert = async () => {
+		if (!request?.previous_status) return;
 		const motivo = revertNotes.trim();
 		if (!motivo) {
 			addToast('Informe o motivo da alteração de status.', 'error');
@@ -393,15 +386,16 @@ const RequestDetail = ({
 		try {
 			const updated = await requestsApi.revertStatus(
 				requestId,
-				toStatus,
 				motivo,
+				request.previous_status,
 			);
 			addToast(
 				`Status revertido para "${REQUEST_STATUS_LABELS[updated.status] || updated.status}".`,
 				'success',
 			);
-			setConfirmingRevert(null);
+			setConfirmingRevert(false);
 			setRevertNotes('');
+			setShowScheduleVisit(false);
 			await loadRequest();
 		} catch (err: any) {
 			addToast(
@@ -855,14 +849,11 @@ const RequestDetail = ({
 
 	const showVisitSection =
 		request != null &&
-		['requisitado', 'visita_tecnica_solicitada'].includes(request.status) &&
+		request.status === 'visita_tecnica_solicitada' &&
 		['basic', 'operator', 'manager', 'admin'].includes(currentUserRole);
 	const hasPendingVisit =
 		request?.visits?.some((v) => !v.completed_at) ?? false;
-	const canScheduleVisit =
-		showVisitSection &&
-		request?.status === 'visita_tecnica_solicitada' &&
-		!hasPendingVisit;
+	const canScheduleVisit = showVisitSection && !hasPendingVisit;
 
 	const auxiliaryTransitions = (request?.allowed_transitions ?? []).filter(
 		(toStatus) => AUXILIARY_TRANSITIONS.has(toStatus),
@@ -870,11 +861,11 @@ const RequestDetail = ({
 	const decisionTransitions = (request?.allowed_transitions ?? []).filter(
 		(toStatus) => !AUXILIARY_TRANSITIONS.has(toStatus),
 	);
-	const reverseTransitions = request?.allowed_reverse_transitions ?? [];
+	const canRevert = Boolean(request?.can_revert && request?.previous_status);
 	const hasFooterActions =
 		auxiliaryTransitions.length > 0 ||
 		decisionTransitions.length > 0 ||
-		reverseTransitions.length > 0 ||
+		canRevert ||
 		(request != null &&
 			APPROVED_LIKE_STATUSES.has(request.status) &&
 			!request.dit_ciente_at &&
@@ -888,17 +879,13 @@ const RequestDetail = ({
 				REQUEST_STATUS_LABELS[toStatus] ||
 				toStatus;
 
-	const reverseLabel = (toStatus: RequestStatus) =>
-		REVERSE_TRANSITION_LABELS[toStatus] ||
-		`Voltar para ${REQUEST_STATUS_LABELS[toStatus] || toStatus}`;
-
 	const renderTransitionButton = (toStatus: RequestStatus) => (
 		<button
 			key={toStatus}
 			onClick={() => {
 				if (DESTRUCTIVE_TRANSITIONS.has(toStatus)) {
 					setConfirmingTransition(toStatus);
-					setConfirmingRevert(null);
+					setConfirmingRevert(false);
 				} else {
 					handleTransition(toStatus);
 				}
@@ -906,22 +893,6 @@ const RequestDetail = ({
 			className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${TRANSITION_STYLES[toStatus] || 'bg-blue-600 hover:bg-blue-700 text-white'}`}
 		>
 			{transitionLabel(toStatus)}
-		</button>
-	);
-
-	const renderReverseButton = (toStatus: RequestStatus) => (
-		<button
-			key={`revert-${toStatus}`}
-			type="button"
-			onClick={() => {
-				setConfirmingRevert(toStatus);
-				setConfirmingTransition(null);
-				setRevertNotes('');
-			}}
-			className="px-4 py-2 text-sm rounded-lg font-medium transition-colors border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-		>
-			<RotateCcw size={14} className="inline mr-1.5" />
-			{reverseLabel(toStatus)}
 		</button>
 	);
 
@@ -1213,7 +1184,8 @@ const RequestDetail = ({
 									)}
 
 									{/* ── Visitas técnicas ── */}
-									{request.visits &&
+									{request.status !== 'requisitado' &&
+										request.visits &&
 										request.visits.length > 0 && (
 											<div>
 												<p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
@@ -1893,7 +1865,7 @@ const RequestDetail = ({
 											</button>
 										)}
 
-									{showScheduleVisit && (
+									{showScheduleVisit && showVisitSection && (
 										<div className="p-4 bg-purple-50 rounded-xl border border-purple-100 space-y-3">
 											<p className="text-sm font-medium text-purple-800">
 												Agendar Visita Técnica
@@ -2433,19 +2405,26 @@ const RequestDetail = ({
 						{/* ── Ações de transição ── */}
 						{hasFooterActions && (
 								<div className="px-6 py-4 border-t border-gray-100 shrink-0">
-									{confirmingRevert ?
+									{confirmingRevert && request.previous_status ?
 										<div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2.5">
 											<p className="text-sm font-semibold text-amber-900 flex items-center gap-2">
 												<RotateCcw size={15} className="shrink-0" />
-												Confirmar reversão para{' '}
-												{REQUEST_STATUS_LABELS[confirmingRevert] ||
-													confirmingRevert}
-												?
+												Confirmar retorno ao status anterior (
+												{REQUEST_STATUS_LABELS[request.previous_status] ||
+													request.previous_status}
+												)?
 											</p>
 											<p className="text-xs text-amber-800 leading-relaxed">
-												{request.status === 'visita_tecnica_solicitada'
+												{request.status === 'visita_tecnica_solicitada' &&
+												request.previous_status === 'requisitado'
 													? 'Visitas técnicas agendadas pendentes serão canceladas automaticamente.'
-													: 'A solicitação será desvinculada da movimentação. Estoque e ativos vinculados à movimentação permanecerão inalterados.'}
+													: ['em_execucao', 'concluido'].includes(request.status)
+														? 'A solicitação será desvinculada da movimentação. Estoque e ativos vinculados à movimentação permanecerão inalterados.'
+														: ['aprovado', 'parcialmente_aprovado', 'reprovado'].includes(
+																	request.status,
+															  )
+															? 'A deliberação atual será limpa para permitir nova correção.'
+															: 'O status voltará ao passo imediatamente anterior do fluxo.'}
 											</p>
 											<textarea
 												rows={2}
@@ -2458,7 +2437,7 @@ const RequestDetail = ({
 												<button
 													type="button"
 													onClick={() => {
-														setConfirmingRevert(null);
+														setConfirmingRevert(false);
 														setRevertNotes('');
 													}}
 													className="flex-1 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 bg-white"
@@ -2467,7 +2446,7 @@ const RequestDetail = ({
 												</button>
 												<button
 													type="button"
-													onClick={() => handleRevert(confirmingRevert)}
+													onClick={() => handleRevert()}
 													disabled={isActing || !revertNotes.trim()}
 													className="flex-1 py-2 text-sm rounded-lg font-medium disabled:opacity-60 bg-amber-600 hover:bg-amber-700 text-white"
 												>
@@ -2573,7 +2552,23 @@ const RequestDetail = ({
 									<div className="flex flex-wrap items-center justify-between gap-3">
 										<div className="flex flex-wrap items-center gap-2">
 											{auxiliaryTransitions.map(renderTransitionButton)}
-											{reverseTransitions.map(renderReverseButton)}
+											{canRevert && request.previous_status && (
+												<button
+													type="button"
+													onClick={() => {
+														setConfirmingRevert(true);
+														setConfirmingTransition(null);
+														setRevertNotes('');
+													}}
+													className="px-4 py-2 text-sm rounded-lg font-medium transition-colors border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+												>
+													<RotateCcw size={14} className="inline mr-1.5" />
+													Voltar ao status anterior (
+													{REQUEST_STATUS_LABELS[request.previous_status] ||
+														request.previous_status}
+													)
+												</button>
+											)}
 											{APPROVED_LIKE_STATUSES.has(request.status) && !request.dit_ciente_at &&
 												['operator', 'manager', 'admin'].includes(currentUserRole) &&
 												!showDitForm && (

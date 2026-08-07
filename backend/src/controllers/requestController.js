@@ -79,24 +79,24 @@ async function changeStatus(req, res, pool, logAudit) {
 
 async function revertStatus(req, res, pool, logAudit) {
   try {
-    const { status: targetStatus, notes } = req.body
-    if (!targetStatus) return res.status(400).json({ message: 'Campo status é obrigatório.' })
+    const { notes, previous_status: expectedPreviousStatus } = req.body
     if (!notes || !String(notes).trim()) {
       return res.status(400).json({ message: 'O motivo da alteração de status é obrigatório.' })
     }
 
     const result = await service.revertStatus(
-      pool, parseInt(req.params.id), targetStatus, req.user, notes
+      pool, parseInt(req.params.id), req.user, notes, expectedPreviousStatus || null
     )
     await logAudit(req.user.id, 'request_status_reverted', 'requests', result.id,
-      { targetStatus, notes }, req.ip)
+      { previous_status: expectedPreviousStatus || null, notes, new_status: result.status }, req.ip)
     res.status(200).json(result)
   } catch (err) {
     const status =
       err.message.includes('não encontrada') ? 404 :
       err.message.includes('Reversão') || err.message.includes('perfil') ||
-      err.message.includes('obrigatório') || err.message.includes('possível') ? 400 :
-      err.message.includes('mudou de status') ? 409 : 500
+      err.message.includes('obrigatório') || err.message.includes('possível') ||
+      err.message.includes('Não há status anterior') || err.message.includes('não é permitida') ? 400 :
+      err.message.includes('mudou') ? 409 : 500
     res.status(status).json({ message: err.message })
   }
 }

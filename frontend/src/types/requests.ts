@@ -89,7 +89,8 @@ export interface EquipmentRequest {
   history?: StatusHistoryEntry[]
   movements?: LinkedMovement[]
   allowed_transitions?: RequestStatus[]
-  allowed_reverse_transitions?: RequestStatus[]
+  can_revert?: boolean
+  previous_status?: RequestStatus | null
 }
 
 export interface TechnicalVisit {
