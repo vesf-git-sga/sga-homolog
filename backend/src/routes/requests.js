@@ -75,6 +75,9 @@ module.exports = function (pool, authenticateToken, authorizePermission, logAudi
   router.patch('/requests/:id/status', authenticateToken,
     (req, res) => controller.changeStatus(req, res, pool, logAudit))
 
+  router.patch('/requests/:id/revert-status', authenticateToken,
+    (req, res) => controller.revertStatus(req, res, pool, logAudit))
+
   router.post('/requests/:id/item-deliberations', authenticateToken,
     (req, res) => controller.submitItemDeliberations(req, res, pool, logAudit))
 

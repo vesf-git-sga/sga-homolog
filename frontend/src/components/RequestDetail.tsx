@@ -12,6 +12,7 @@ import {
 	Search,
 	CheckCircle2,
 	XCircle,
+	RotateCcw,
 } from 'lucide-react';
 import { useToast, AuthContext } from '../App';
 import StatusBadge from './StatusBadge';
@@ -116,6 +117,12 @@ const TRANSITION_LABELS: Record<string, string> = {
 
 const TRANSITION_LABELS_FROM_UNAVAILABLE: Record<string, string> = {
 	aprovado: 'Equipamento Disponível',
+};
+
+const REVERSE_TRANSITION_LABELS: Record<string, string> = {
+	requisitado: 'Voltar para Requisitado',
+	aprovado: 'Voltar para Aprovado (desvincular movimentação)',
+	em_execucao: 'Voltar para Em Execução (desvincular movimentação)',
 };
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['cancelado', 'reprovado']);
@@ -250,7 +257,10 @@ const RequestDetail = ({
 	// Ações inline
 	const [confirmingTransition, setConfirmingTransition] =
 		useState<RequestStatus | null>(null);
+	const [confirmingRevert, setConfirmingRevert] =
+		useState<RequestStatus | null>(null);
 	const [transitionNotes, setTransitionNotes] = useState('');
+	const [revertNotes, setRevertNotes] = useState('');
 	const [isActing, setIsActing] = useState(false);
 
 	// Novo agendamento de visita
@@ -365,6 +375,37 @@ const RequestDetail = ({
 		} catch (err: any) {
 			addToast(
 				err?.response?.data?.message || 'Erro ao atualizar status.',
+				'error',
+			);
+		} finally {
+			setIsActing(false);
+		}
+	};
+
+	const handleRevert = async (toStatus: RequestStatus) => {
+		if (!request) return;
+		const motivo = revertNotes.trim();
+		if (!motivo) {
+			addToast('Informe o motivo da alteração de status.', 'error');
+			return;
+		}
+		setIsActing(true);
+		try {
+			const updated = await requestsApi.revertStatus(
+				requestId,
+				toStatus,
+				motivo,
+			);
+			addToast(
+				`Status revertido para "${REQUEST_STATUS_LABELS[updated.status] || updated.status}".`,
+				'success',
+			);
+			setConfirmingRevert(null);
+			setRevertNotes('');
+			await loadRequest();
+		} catch (err: any) {
+			addToast(
+				err?.response?.data?.message || 'Erro ao reverter status.',
 				'error',
 			);
 		} finally {
@@ -829,6 +870,15 @@ const RequestDetail = ({
 	const decisionTransitions = (request?.allowed_transitions ?? []).filter(
 		(toStatus) => !AUXILIARY_TRANSITIONS.has(toStatus),
 	);
+	const reverseTransitions = request?.allowed_reverse_transitions ?? [];
+	const hasFooterActions =
+		auxiliaryTransitions.length > 0 ||
+		decisionTransitions.length > 0 ||
+		reverseTransitions.length > 0 ||
+		(request != null &&
+			APPROVED_LIKE_STATUSES.has(request.status) &&
+			!request.dit_ciente_at &&
+			['operator', 'manager', 'admin'].includes(currentUserRole));
 
 	const transitionLabel = (toStatus: RequestStatus) =>
 		request?.status === 'indisponivel_estoque' &&
@@ -838,12 +888,17 @@ const RequestDetail = ({
 				REQUEST_STATUS_LABELS[toStatus] ||
 				toStatus;
 
+	const reverseLabel = (toStatus: RequestStatus) =>
+		REVERSE_TRANSITION_LABELS[toStatus] ||
+		`Voltar para ${REQUEST_STATUS_LABELS[toStatus] || toStatus}`;
+
 	const renderTransitionButton = (toStatus: RequestStatus) => (
 		<button
 			key={toStatus}
 			onClick={() => {
 				if (DESTRUCTIVE_TRANSITIONS.has(toStatus)) {
 					setConfirmingTransition(toStatus);
+					setConfirmingRevert(null);
 				} else {
 					handleTransition(toStatus);
 				}
@@ -851,6 +906,22 @@ const RequestDetail = ({
 			className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${TRANSITION_STYLES[toStatus] || 'bg-blue-600 hover:bg-blue-700 text-white'}`}
 		>
 			{transitionLabel(toStatus)}
+		</button>
+	);
+
+	const renderReverseButton = (toStatus: RequestStatus) => (
+		<button
+			key={`revert-${toStatus}`}
+			type="button"
+			onClick={() => {
+				setConfirmingRevert(toStatus);
+				setConfirmingTransition(null);
+				setRevertNotes('');
+			}}
+			className="px-4 py-2 text-sm rounded-lg font-medium transition-colors border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+		>
+			<RotateCcw size={14} className="inline mr-1.5" />
+			{reverseLabel(toStatus)}
 		</button>
 	);
 
@@ -2360,10 +2431,51 @@ const RequestDetail = ({
 						</div>
 
 						{/* ── Ações de transição ── */}
-						{request.allowed_transitions &&
-							request.allowed_transitions.length > 0 && (
+						{hasFooterActions && (
 								<div className="px-6 py-4 border-t border-gray-100 shrink-0">
-									{confirmingTransition ?
+									{confirmingRevert ?
+										<div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2.5">
+											<p className="text-sm font-semibold text-amber-900 flex items-center gap-2">
+												<RotateCcw size={15} className="shrink-0" />
+												Confirmar reversão para{' '}
+												{REQUEST_STATUS_LABELS[confirmingRevert] ||
+													confirmingRevert}
+												?
+											</p>
+											<p className="text-xs text-amber-800 leading-relaxed">
+												{request.status === 'visita_tecnica_solicitada'
+													? 'Visitas técnicas agendadas pendentes serão canceladas automaticamente.'
+													: 'A solicitação será desvinculada da movimentação. Estoque e ativos vinculados à movimentação permanecerão inalterados.'}
+											</p>
+											<textarea
+												rows={2}
+												placeholder="Motivo da alteração (obrigatório)…"
+												value={revertNotes}
+												onChange={(e) => setRevertNotes(e.target.value)}
+												className="w-full px-3 py-2 text-sm border border-amber-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none bg-white"
+											/>
+											<div className="flex gap-2">
+												<button
+													type="button"
+													onClick={() => {
+														setConfirmingRevert(null);
+														setRevertNotes('');
+													}}
+													className="flex-1 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 bg-white"
+												>
+													Não, voltar
+												</button>
+												<button
+													type="button"
+													onClick={() => handleRevert(confirmingRevert)}
+													disabled={isActing || !revertNotes.trim()}
+													className="flex-1 py-2 text-sm rounded-lg font-medium disabled:opacity-60 bg-amber-600 hover:bg-amber-700 text-white"
+												>
+													{isActing ? 'Aguarde…' : 'Sim, reverter'}
+												</button>
+											</div>
+										</div>
+									: confirmingTransition ?
 										<div className="rounded-lg border border-red-200 bg-red-50 p-3 space-y-2.5">
 											<p className="text-sm font-semibold text-red-800 flex items-center gap-2">
 												<AlertTriangle size={15} className="shrink-0" />
@@ -2461,6 +2573,7 @@ const RequestDetail = ({
 									<div className="flex flex-wrap items-center justify-between gap-3">
 										<div className="flex flex-wrap items-center gap-2">
 											{auxiliaryTransitions.map(renderTransitionButton)}
+											{reverseTransitions.map(renderReverseButton)}
 											{APPROVED_LIKE_STATUSES.has(request.status) && !request.dit_ciente_at &&
 												['operator', 'manager', 'admin'].includes(currentUserRole) &&
 												!showDitForm && (
